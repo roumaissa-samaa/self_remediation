@@ -1,0 +1,41 @@
+# LLM et Orchestration
+langchain==1.2.15
+langgraph==1.1.6
+langchain-core==1.2.26
+langchain-community==0.4.1
+langchain-groq==1.1.2
+langchain-ollama==1.0.1
+langchain-elasticsearch==1.0.0
+langchain-qdrant==1.1.0
+langchain-mcp-adapters==0.2.2
+
+# LLM APIs
+groq
+
+# Vector Store
+qdrant-client==1.14.1
+
+# Elasticsearch
+elasticsearch==8.13.0
+
+# Messagerie
+kafka-python==2.0.2
+
+# Tracing LLM
+langfuse==2.60.0
+
+# Gouvernance
+opa-python-client==1.3.3
+
+# API Webhook
+fastapi==0.115.12
+uvicorn==0.34.0
+
+# Kubernetes (test local Minikube)
+kubernetes==32.0.1
+
+# Validation et utilitaires
+pydantic==2.12.5
+python-dotenv==1.1.0
+requests==2.33.1
+jinja2>=3.1.0

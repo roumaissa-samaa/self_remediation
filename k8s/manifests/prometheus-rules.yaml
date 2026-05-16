@@ -1,0 +1,36 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: agent-llm-rules
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+  - name: agent-llm.rules
+    interval: 30s
+    rules:
+    - alert: PodUnhealthy
+      expr: |
+        kube_pod_container_status_waiting_reason{namespace="default", reason!="ContainerCreating", reason!="PodInitializing"} == 1
+        or kube_pod_container_status_last_terminated_reason{namespace="default", reason!="Completed"} == 1
+        or increase(kube_pod_container_status_restarts_total{namespace="default"}[10m]) > 0
+      for: 0s
+      labels:
+        severity: critical
+      annotations:
+        alertname: '{{ if $labels.reason }}{{ $labels.reason }}{{ else }}PodRestarting{{ end }}'
+        service: '{{ $labels.pod }}'
+        namespace: '{{ $labels.namespace }}'
+        message: 'Pod {{ $labels.pod }} unhealthy in namespace {{ $labels.namespace }}: {{ $labels.reason }}'
+
+    - alert: PodNotReady
+      expr: kube_pod_container_status_ready{namespace="default"} == 0
+      for: 1m
+      labels:
+        severity: warning
+      annotations:
+        alertname: PodNotReady
+        service: '{{ $labels.pod }}'
+        namespace: '{{ $labels.namespace }}'
+        message: 'Pod {{ $labels.pod }} readiness probe failing in namespace {{ $labels.namespace }}'

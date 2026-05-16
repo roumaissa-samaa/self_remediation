@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-monitoring-kube-prometheus-alertmanager
+  namespace: monitoring
+stringData:
+  alertmanager.yaml: |
+    global:
+      resolve_timeout: 5m
+    route:
+      group_by: ['alertname']
+      group_wait: 10s
+      group_interval: 30s
+      repeat_interval: 30s
+      receiver: 'webhook-agent'
+      routes:
+      - matchers:
+        - alertname =~ "PodUnhealthy|PodNotReady"
+        receiver: 'webhook-agent'
+    receivers:
+    - name: 'webhook-agent'
+      webhook_configs:
+      - url: 'http://host.minikube.internal:8000/alert'
+        send_resolved: false
+    inhibit_rules:
+    - source_matchers:
+      - severity = critical
+      target_matchers:
+      - severity = warning
