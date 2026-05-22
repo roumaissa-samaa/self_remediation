@@ -82,13 +82,13 @@ services:
       - "3000:3000"
 
   opa:
-      image: openpolicyagent/opa:1.16.1
-      container_name: opa
-      ports:
-        - "8181:8181"
-      command: run --server --addr 0.0.0.0:8181 /policies
-      volumes:
-        - ./config/remediation_policy.rego:/policies/remediation_policy.rego
+    image: openpolicyagent/opa:1.16.1
+    container_name: opa
+    ports:
+      - "8181:8181"
+    command: run --server --addr 0.0.0.0:8181 /policies
+    volumes:
+      - ./config/remediation_policy.rego:/policies/remediation_policy.rego
 volumes:
   es_data:
   qdrant_data:

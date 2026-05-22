@@ -164,6 +164,13 @@ def init_rag():
         from setup.seed_rag import seed
         seed()
 
+def start_mcp_server():
+    print("\nStarting MCP server on port 8001...")
+    subprocess.run([
+        sys.executable, "mcp_server.py",
+    ])
+
+
 def start_webhook():
     print("\nStarting FastAPI webhook on port 8000...")
     subprocess.run([
@@ -200,6 +207,17 @@ if __name__ == "__main__":
 
     init_rag()
 
+    mcp_mode = os.getenv("MCP_MODE", "mock")
+    if mcp_mode == "real":
+        if not is_port_free(8001):
+            print("\nPort 8001 in use — freeing it...")
+            free_port(8001)
+            time.sleep(1)
+        mcp_thread = threading.Thread(target=start_mcp_server, daemon=True)
+        mcp_thread.start()
+        time.sleep(2)
+        print("  OK  MCP server running on port 8001")
+
     if not is_port_free(8000):
         print("\nPort 8000 in use — freeing it...")
         free_port(8000)
@@ -215,6 +233,8 @@ if __name__ == "__main__":
     print("\n" + "=" * 55)
     print("  System ready — Waiting for incidents")
     print("  Webhook : http://localhost:8000")
+    if mcp_mode == "real":
+        print("  MCP     : http://localhost:8001/sse")
     print("  Test    : python tests/simulate_alert.py")
     print("=" * 55 + "\n")
 

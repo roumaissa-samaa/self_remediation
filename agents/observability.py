@@ -1,6 +1,6 @@
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
-from mcp.client import get_logs, get_metrics, get_infra_state
+from mcp_layer.client import get_logs, get_metrics, get_infra_state
 from orchestrator.state import AgentState
 from config.langfuse import trace_llm
 from config.prompts import load_prompt
