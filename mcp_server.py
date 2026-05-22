@@ -6,49 +6,42 @@ server = FastMCP("k8s-mcp-server")
 
 @server.tool()
 def get_logs(source: str = "platform") -> str:
-    """Lire les logs Kubernetes (events + pod logs) via kubectl"""
     from k8s.prometheus_client import get_logs as _fn
     return json.dumps(_fn(source))
 
 
 @server.tool()
 def get_metrics(source: str = "platform") -> str:
-    """Lire les métriques Prometheus (restarts, CPU, mémoire)"""
     from k8s.prometheus_client import get_metrics as _fn
     return json.dumps(_fn(source))
 
 
 @server.tool()
 def get_infra_state(source: str = "platform") -> str:
-    """Lire l'état infra : pods et nodes via kubectl"""
     from k8s.k8s_client import get_infra_state as _fn
     return json.dumps(_fn(source))
 
 
 @server.tool()
 def get_platform_config(agent_type: str = "platform") -> str:
-    """Lire la configuration plateforme (deployments, actions disponibles) ou integration (Jenkins, DB)"""
     from k8s.k8s_client import get_platform_config as _fn
     return json.dumps(_fn(agent_type))
 
 
 @server.tool()
 def get_jenkins_state() -> str:
-    """Lire l'état des pipelines Jenkins"""
     from k8s.k8s_client import get_jenkins_state as _fn
     return json.dumps(_fn())
 
 
 @server.tool()
 def get_db_state() -> str:
-    """Lire l'état de la base de données (connexions, santé)"""
     from k8s.k8s_client import get_db_state as _fn
     return json.dumps(_fn())
 
 
 @server.tool()
 def execute_kubectl(command: str, reason: str = "", risk_level: str = "low") -> str:
-    """Exécuter une commande kubectl de remédiation sur le cluster"""
     from k8s.kubectl_executor import execute_action as _fn
     result = _fn({"command": command, "reason": reason, "risk_level": risk_level})
     return json.dumps(result)
