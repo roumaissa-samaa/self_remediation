@@ -7,7 +7,10 @@ logger = logging.getLogger(__name__)
 
 _MCP_MODE = os.getenv("MCP_MODE", "mock")
 
-# Statuses that indicate a pod is in a genuinely unhealthy waiting/terminated state
+# Normal transient states during pod startup — everything else is treated as unhealthy
+_NORMAL_WAITING = {"PodInitializing", "ContainerCreating"}
+
+# Known-bad reasons kept for log clarity
 _UNHEALTHY_WAITING = {
     "CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull",
     "OOMKilled", "Error", "CreateContainerError", "InvalidImageName",
@@ -39,10 +42,16 @@ def is_pod_unhealthy(service: str, namespace: str) -> bool:
             container_statuses = item.get("status", {}).get("containerStatuses", [])
             for cs in container_statuses:
                 waiting_reason = cs.get("state", {}).get("waiting", {}).get("reason", "")
-                if waiting_reason in _UNHEALTHY_WAITING:
-                    logger.debug("pre_check: %s is unhealthy (waiting: %s)", pod_name, waiting_reason)
+                if waiting_reason and waiting_reason not in _NORMAL_WAITING:
+                    if waiting_reason not in _UNHEALTHY_WAITING:
+                        logger.warning("pre_check: unknown waiting reason '%s' for %s — treating as unhealthy", waiting_reason, pod_name)
+                    else:
+                        logger.debug("pre_check: %s is unhealthy (waiting: %s)", pod_name, waiting_reason)
                     return True
                 last_reason = cs.get("lastState", {}).get("terminated", {}).get("reason", "")
+                if last_reason and last_reason not in _UNHEALTHY_TERMINATED:
+                    logger.warning("pre_check: unknown terminated reason '%s' for %s — treating as unhealthy", last_reason, pod_name)
+                    return True
                 if last_reason in _UNHEALTHY_TERMINATED:
                     logger.debug("pre_check: %s is unhealthy (last terminated: %s)", pod_name, last_reason)
                     return True
