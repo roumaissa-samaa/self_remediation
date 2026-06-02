@@ -177,16 +177,7 @@ PROMETHEUS_URL=http://localhost:9090
 K8S_NAMESPACE=default
 ```
 
-**Deploy test workloads:**
-
-```bash
-kubectl apply -f k8s/fixtures/crash-test.yaml       # CrashLoopBackOff
-kubectl apply -f k8s/fixtures/oomkill-test.yaml     # OOMKill
-kubectl apply -f k8s/fixtures/image-pull-test.yaml  # ImagePullBackOff
-kubectl apply -f k8s/fixtures/probe-fail-test.yaml  # PodNotReady (readiness probe)
-```
-
-**Wire Alertmanager:**
+**Configure Alertmanager:**
 
 ```bash
 kubectl apply -f k8s/manifests/alertmanager-config.yaml
