@@ -9,6 +9,7 @@ from orchestrator.graph import run_pipeline
 from orchestrator.post_check import verify_remediation
 from agents.audit import update_audit_resolved
 from agents.memory_writer import write_to_cache
+from agents.teams_notifier import notify_teams_resolved, notify_teams_unresolved
 
 _SEP = "═" * 58
 
@@ -102,8 +103,10 @@ def _process_incident(incident: dict) -> None:
                 print(f"\n{_SEP}")
                 if confirmed:
                     print(f"  RESULT  →  ✓ RESOLVED  |  Agent: {agent}  |  {n_ok}/{len(plan)} actions OK")
+                    notify_teams_resolved(incident, agent, n_ok, len(plan))
                 else:
                     print(f"  RESULT  →  ✗ UNRESOLVED  |  Agent: {agent}  |  post-check FAILED")
+                    notify_teams_unresolved(incident, final_state, agent, n_ok, len(plan))
                 print(f"{_SEP}\n")
 
                 if confirmed and fp not in _resolved_fingerprints:

@@ -1,6 +1,7 @@
 from elasticsearch import Elasticsearch
 from orchestrator.state import AgentState
 from config.logger import get_logger
+from agents.teams_notifier import notify_teams_opa_blocked
 from datetime import datetime
 import os
 from dotenv import load_dotenv
@@ -46,6 +47,14 @@ def notify_operator(state: AgentState) -> AgentState:
         log.info("block recorded in ELK", extra={"incident_id": inc["incident_id"]})
     except Exception as e:
         log.error("ELK block record error", extra={"error": str(e)})
+
+    notify_teams_opa_blocked(
+        incident=inc,
+        obs=obs,
+        opa_st=opa_st,
+        agent=comm["active_agent"],
+        plan=exec_st.get("remediation_plan", []),
+    )
 
     return {
         **state,

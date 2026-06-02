@@ -60,8 +60,6 @@ def _infer_type_and_agent(filename: str) -> tuple[str, str]:
 
 
 def _extract_section(md_text: str, headers: set[str]) -> str:
-    """Extract the full text of the first H1/H2 section whose title matches headers.
-    Captures all content including H3 subsections until the next H1/H2."""
     in_section = False
     buffer: list[str] = []
 
@@ -78,6 +76,51 @@ def _extract_section(md_text: str, headers: set[str]) -> str:
     return _clean_text("\n".join(buffer))
 
 
+def ingest_single(file_path: Path) -> bool:
+    raw = file_path.read_text(encoding="utf-8", errors="ignore")
+    meta, content = _parse_frontmatter(raw)
+
+    inferred_type, inferred_agent = _infer_type_and_agent(file_path.stem)
+    incident_type = meta.get("type", "") or inferred_type
+    routing_agent = meta.get("agent", "") or inferred_agent
+
+    if not raw.startswith("---"):
+        frontmatter = f"---\ntype: {incident_type}\nagent: {routing_agent}\n---\n\n"
+        file_path.write_text(frontmatter + raw, encoding="utf-8")
+        print(f"  [FRONTMATTER] {file_path.name} -> type={incident_type}, agent={routing_agent}")
+
+    incident_name = file_path.stem.replace("-", " ").replace("_", " ")
+    causes      = _extract_section(content, _CAUSES_HEADERS)
+    remediation = _extract_section(content, _REMEDIATION_HEADERS)
+    actions     = _extract_section(content, _ACTIONS_HEADERS)
+
+    if not remediation:
+        print(f"  [SKIP] {file_path.name} — no remediation section")
+        return False
+
+    embedding_text = (
+        f"Incident: {incident_name}. "
+        f"Type: {incident_type}. "
+        f"Causes: {causes[:300]}. "
+        f"Remediation: {remediation[:400]}"
+    )
+    vector = embeddings.embed_query(embedding_text)
+
+    payload = {
+        "incident":    incident_name,
+        "type":        incident_type,
+        "agent":       routing_agent,
+        "cause":       causes,
+        "remediation": remediation,
+        "actions":     actions,
+    }
+
+    point = PointStruct(id=str(uuid.uuid4()), vector=vector, payload=payload)
+    client.upsert(collection_name="documents", points=[point])
+    print(f"  [{incident_type:>10} | {routing_agent}]  {file_path.name}")
+    return True
+
+
 def seed() -> None:
     if not RUNBOOKS_DIR.exists():
         raise FileNotFoundError(f"Runbooks directory not found: {RUNBOOKS_DIR}")
@@ -88,49 +131,7 @@ def seed() -> None:
         return
 
     print(f"Seeding RAG documents from runbooks ({len(files)} files)...")
-    total = 0
-
-    for file_path in files:
-        raw = file_path.read_text(encoding="utf-8", errors="ignore")
-        meta, content = _parse_frontmatter(raw)
-
-        inferred_type, inferred_agent = _infer_type_and_agent(file_path.stem)
-        incident_type = meta.get("type", "") or inferred_type
-        routing_agent = meta.get("agent", "") or inferred_agent
-        incident_name = file_path.stem.replace("-", " ").replace("_", " ")
-
-        causes      = _extract_section(content, _CAUSES_HEADERS)
-        remediation = _extract_section(content, _REMEDIATION_HEADERS)
-        actions     = _extract_section(content, _ACTIONS_HEADERS)
-
-        if not remediation:
-            print(f"  [SKIP] {file_path.name} — no remediation section found")
-            continue
-
-        # 1 point per runbook — full causes + full remediation in the embedding
-        # This avoids duplicate near-identical points and gives the LLM complete context
-        embedding_text = (
-            f"Incident: {incident_name}. "
-            f"Type: {incident_type}. "
-            f"Causes: {causes[:300]}. "
-            f"Remediation: {remediation[:400]}"
-        )
-        vector = embeddings.embed_query(embedding_text)
-
-        payload = {
-            "incident":    incident_name,
-            "type":        incident_type,
-            "agent":       routing_agent,
-            "cause":       causes,
-            "remediation": remediation,
-            "actions":     actions,
-        }
-
-        point = PointStruct(id=str(uuid.uuid4()), vector=vector, payload=payload)
-        client.upsert(collection_name="documents", points=[point])
-        total += 1
-        print(f"  [{incident_type:>10} | {routing_agent}]  {file_path.name}")
-
+    total = sum(1 for f in files if ingest_single(f))
     print(f"\nRAG ready — {total} indexed points")
 
 

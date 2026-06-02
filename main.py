@@ -25,7 +25,7 @@ def free_port(port: int):
                     pids.add(parts[-1])
         for pid in pids:
             subprocess.run(["taskkill", "/PID", pid, "/F"],
-                           capture_output=True)
+                        capture_output=True)
             print(f"  Port {port} freed (PID {pid})")
     except Exception:
         pass
@@ -180,6 +180,10 @@ def start_webhook():
         "--log-level", "warning"
     ])
 
+def start_runbook_watcher():
+    from setup.watch_runbooks import watch
+    watch()
+
 def start_consumer():
     print("\nStarting Kafka consumer...")
     from orchestrator.consumer import start_consumer
@@ -206,6 +210,11 @@ if __name__ == "__main__":
     init_elasticsearch()
 
     init_rag()
+
+    print("\nStarting runbook watcher...")
+    watcher_thread = threading.Thread(target=start_runbook_watcher, daemon=True)
+    watcher_thread.start()
+    print("  OK  Watching setup/runbooks/ for new .md files")
 
     mcp_mode = os.getenv("MCP_MODE", "mock")
     if mcp_mode == "real":
@@ -235,7 +244,6 @@ if __name__ == "__main__":
     print("  Webhook : http://localhost:8000")
     if mcp_mode == "real":
         print("  MCP     : http://localhost:8001/sse")
-    print("  Test    : python tests/simulate_alert.py")
     print("=" * 55 + "\n")
 
     start_consumer()
