@@ -178,10 +178,24 @@ def run_pipeline(incident: dict):
     agent    = comm_st.get("active_agent", "?")
     n_ok     = sum(1 for r in (exec_st.get("execution_result") or []) if r.get("status") == "success")
 
-    if not resolved:
-        print(f"\n{_SEP}")
-        print(f"  RESULT  →  ✗ BLOCKED  |  Agent: {agent}  |  OPA reason: {opa_st.get('reason', '?')[:60]}")
-        print(f"{_SEP}\n")
+    opa_max_retries = int(os.getenv("OPA_MAX_RETRIES", "2"))
+
+    print(f"\n{_SEP}")
+    if not opa_st.get("approved", False):
+        if opa_st.get("retry_count", 0) >= opa_max_retries:
+            print(f"  STATUS  →  ✗ BLOCKED     |  Agent: {agent}  |  OPA reason: {opa_st.get('reason', '?')}")
+        else:
+            print(f"  STATUS  →  ✗ REFUSED     |  Agent: {agent}  |  OPA reason: {opa_st.get('reason', '?')}")
+    else:
+        exec_results = exec_st.get("execution_result") or []
+        errors = [r.get("detail", "?") for r in exec_results if r.get("status") == "error"]
+        if not exec_results:
+            print(f"  STATUS  →  ✗ NO ACTIONS  |  Agent: {agent}  |  Plan vide ou toutes les commandes skippees")
+        elif errors:
+            print(f"  STATUS  →  ✗ EXEC FAILED |  Agent: {agent}  |  {errors[0][:60]}")
+        else:
+            print(f"  STATUS  →  ✓ EXECUTED    |  Agent: {agent}  |  {n_ok}/{len(exec_results)} action(s) OK  |  awaiting post-check...")
+    print(f"{_SEP}\n")
 
     log.info("pipeline complete", extra={
         "incident_id":  incident["incident_id"],

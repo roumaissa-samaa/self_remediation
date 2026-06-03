@@ -48,7 +48,7 @@ def _print_plan(mode: str, plan: list) -> None:
         print(f"  [{i}] {a.get('command', '?')}")
         reason = a.get("reason", "")
         if reason:
-            print(f"       {reason[:112]}")
+            print(f"       {reason}")
     print(f"{sep}\n")
 
 

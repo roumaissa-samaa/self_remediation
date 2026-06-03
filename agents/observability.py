@@ -33,7 +33,7 @@ def _print_classification(inc: dict, c: dict) -> None:
     print(f"  Cause      : {c.get('incident_cause', '?')}")
     hyp = c.get("root_cause_hypothesis", "")
     if hyp:
-        print(f"  Hypothesis : {hyp[:115]}")
+        print(f"  Hypothesis : {hyp}")
     comps = c.get("affected_components", [])
     if comps:
         print(f"  Components : {', '.join(comps)}")

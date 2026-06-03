@@ -9,7 +9,7 @@ from orchestrator.graph import run_pipeline
 from orchestrator.post_check import verify_remediation
 from agents.audit import update_audit_resolved
 from agents.memory_writer import write_to_cache
-from agents.teams_notifier import notify_teams_resolved, notify_teams_unresolved
+from agents.notifier import notify_teams_resolved, notify_teams_critical
 
 _SEP = "═" * 58
 
@@ -90,29 +90,60 @@ def _process_incident(incident: dict) -> None:
                 agent   = comm_st.get("active_agent", "?")
                 n_ok    = sum(1 for r in (exec_st.get("execution_result") or []) if r.get("status") == "success")
 
-                confirmed = verify_remediation(
-                    incident.get("service", ""),
-                    incident.get("namespace", "default"),
-                    incident_id,
+                opa_max_retries = int(os.getenv("OPA_MAX_RETRIES", "2"))
+                opa_blocked = (
+                    not opa_st.get("approved", False)
+                    and opa_st.get("retry_count", 0) >= opa_max_retries
                 )
 
-                update_audit_resolved(incident_id, confirmed)
-                if confirmed:
-                    write_to_cache(final_state)
-
-                print(f"\n{_SEP}")
-                if confirmed:
-                    print(f"  RESULT  →  ✓ RESOLVED  |  Agent: {agent}  |  {n_ok}/{len(plan)} actions OK")
-                    notify_teams_resolved(incident, agent, n_ok, len(plan))
+                if opa_blocked:
+                    # notify_operator() in the graph already sent the CRITICAL notification
+                    update_audit_resolved(incident_id, False)
+                    print(f"\n{_SEP}")
+                    print(f"  RESULT  →  ✗ OPA BLOCKED  |  Agent: {agent}  |  CRITICAL notification sent")
+                    print(f"{_SEP}\n")
                 else:
-                    print(f"  RESULT  →  ✗ UNRESOLVED  |  Agent: {agent}  |  post-check FAILED")
-                    notify_teams_unresolved(incident, final_state, agent, n_ok, len(plan))
-                print(f"{_SEP}\n")
+                    confirmed = verify_remediation(
+                        incident.get("service", ""),
+                        incident.get("namespace", "default"),
+                        incident_id,
+                    )
 
-                if confirmed and fp not in _resolved_fingerprints:
-                    _resolved_fingerprints[fp] = time.time()
-                elif not confirmed and fp in _resolved_fingerprints:
-                    del _resolved_fingerprints[fp]
+                    update_audit_resolved(incident_id, confirmed)
+                    if confirmed:
+                        write_to_cache(final_state)
+                        notify_teams_resolved(
+                            incident_id=incident_id,
+                            alertname=incident.get("alertname", "?"),
+                            service=incident.get("service", "?"),
+                            namespace=incident.get("namespace", "default"),
+                            agent=agent,
+                            n_ok=n_ok,
+                            n_total=len(plan),
+                        )
+                    else:
+                        notify_teams_critical(
+                            incident_id=incident_id,
+                            alertname=incident.get("alertname", "?"),
+                            service=incident.get("service", "?"),
+                            namespace=incident.get("namespace", "default"),
+                            agent=agent,
+                            n_ok=n_ok,
+                            n_total=len(plan),
+                            reason="post-check FAILED — deployment not healthy",
+                        )
+
+                    print(f"\n{_SEP}")
+                    if confirmed:
+                        print(f"  RESULT  →  ✓ RESOLVED  |  Agent: {agent}  |  {n_ok}/{len(plan)} actions OK")
+                    else:
+                        print(f"  RESULT  →  ✗ UNRESOLVED  |  Agent: {agent}  |  post-check FAILED")
+                    print(f"{_SEP}\n")
+
+                    if confirmed and fp not in _resolved_fingerprints:
+                        _resolved_fingerprints[fp] = time.time()
+                    elif not confirmed and fp in _resolved_fingerprints:
+                        del _resolved_fingerprints[fp]
                 return
             except Exception as exc:
                 last_error = exc
@@ -129,6 +160,16 @@ def _process_incident(incident: dict) -> None:
             "Incident %s ABANDONED after %d attempts. Last error: %s | Payload: %s",
             incident_id, _MAX_RETRIES, last_error,
             json.dumps(incident, ensure_ascii=False)
+        )
+        notify_teams_critical(
+            incident_id=incident_id,
+            alertname=incident.get("alertname", "?"),
+            service=incident.get("service", "?"),
+            namespace=incident.get("namespace", "default"),
+            agent="?",
+            n_ok=0,
+            n_total=0,
+            reason=f"pipeline ABANDONED after {_MAX_RETRIES} retries — {last_error}",
         )
     finally:
         _active_fingerprints.discard(fp)
