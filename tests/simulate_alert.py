@@ -5,65 +5,65 @@ WEBHOOK_URL = "http://localhost:8000/alert"
 
 SCENARIOS = {
 
-    # ── CAS SIMPLES ───────────────────────────────────────
+    # ── SIMPLE CASES ──────────────────────────────────────
     "1": {
-        "name":      "Platform seul — api-gateway CrashLoopBackOff",
+        "name":      "Platform only — api-gateway CrashLoopBackOff",
         "alertname": "PodCrashLoopBackOff",
         "service":   "api-gateway",
         "namespace": "production",
-        "message":   "Pod api-gateway en CrashLoopBackOff restartCount=12 CPU=95% — probleme K8s uniquement",
+        "message":   "Pod api-gateway in CrashLoopBackOff restartCount=12 CPU=95% — K8s issue only",
         "source":    "alertmanager"
     },
     "2": {
-        "name":      "Integration seul — DB connection exhausted",
+        "name":      "Integration only — DB connection exhausted",
         "alertname": "DatabaseConnectionExhausted",
         "service":   "postgres-prod",
         "namespace": "production",
-        "message":   "Pool de connexions DB sature 500/500 response_time=8500ms — probleme DB uniquement sans K8s",
+        "message":   "DB connection pool saturated 500/500 response_time=8500ms — DB issue only, no K8s",
         "source":    "alertmanager"
     },
 
     # ── SHARED STATE ──────────────────────────────────────
     "3": {
-        "name":      "Shared state : Integration besoin donnees K8s de Platform",
+        "name":      "Shared state: Integration needs K8s data from Platform",
         "alertname": "JenkinsPipelineFailed",
         "service":   "deploy-prod",
         "namespace": "ci-cd",
-        "message":   "Pipeline Jenkins deploy-prod FAILED build=142 DB timeout — pods K8s api-gateway en CrashLoopBackOff bloquent le deploiement — Integration a besoin de l etat K8s pour correler",
+        "message":   "Jenkins pipeline deploy-prod FAILED build=142 DB timeout — K8s pods api-gateway in CrashLoopBackOff blocking deployment — Integration needs K8s state to correlate",
         "source":    "alertmanager"
     },
     "4": {
-        "name":      "Shared state : Platform besoin donnees DB de Integration",
+        "name":      "Shared state: Platform needs DB data from Integration",
         "alertname": "PodOOMKilledDBLeak",
         "service":   "backend-api",
         "namespace": "production",
-        "message":   "Pod backend-api OOMKilled — memory leak cause par connexions DB non liberees postgres-prod — Platform a besoin etat DB pour correler",
+        "message":   "Pod backend-api OOMKilled — memory leak caused by unreleased DB connections postgres-prod — Platform needs DB state to correlate",
         "source":    "alertmanager"
     },
 
     # ── OPA SCENARIOS ─────────────────────────────────────
     "5": {
-        "name":      "OPA — Validation directe premiere tentative",
+        "name":      "OPA — Direct approval on first attempt",
         "alertname": "PodCrashLoopBackOff",
         "service":   "frontend",
         "namespace": "production",
-        "message":   "Pod frontend CrashLoopBackOff redemarrage simple necessaire — action K8s basique",
+        "message":   "Pod frontend CrashLoopBackOff simple restart required — basic K8s action",
         "source":    "alertmanager"
     },
     "6": {
-        "name":      "OPA — Refus premier plan puis approbation deuxieme",
+        "name":      "OPA — First plan rejected then second approved",
         "alertname": "JenkinsPipelineFailed",
         "service":   "staging-deploy",
         "namespace": "staging",
-        "message":   "Pipeline staging-deploy FAILED — LLM va proposer une action avancee refusee OPA puis se corriger avec une action autorisee",
+        "message":   "Pipeline staging-deploy FAILED — LLM will propose an advanced action rejected by OPA then self-correct with an authorized action",
         "source":    "alertmanager"
     },
     "7": {
-        "name":      "OPA — Blocage definitif deux refus consecutifs",
+        "name":      "OPA — Definitive block after two consecutive rejections",
         "alertname": "DatabaseCriticalFailure",
         "service":   "postgres-prod",
         "namespace": "production",
-        "message":   "Database critical failure — corruption detectee — LLM va proposer des actions non autorisees drop_table ou modify_credentials causant blocage definitif OPA",
+        "message":   "Database critical failure — corruption detected — LLM will propose unauthorized actions drop_table or modify_credentials causing definitive OPA block",
         "source":    "alertmanager"
     },
 }
@@ -76,30 +76,30 @@ def send_alert(scenario: dict):
         "message":   scenario["message"],
         "source":    scenario["source"]
     }
-    print(f"\nEnvoi alerte : {scenario['name']}")
-    print(f"Payload : {json.dumps(payload, indent=2)}")
+    print(f"\nSending alert: {scenario['name']}")
+    print(f"Payload: {json.dumps(payload, indent=2)}")
     try:
         response = requests.post(WEBHOOK_URL, json=payload)
-        print(f"Reponse : {response.json()}")
+        print(f"Response: {response.json()}")
     except Exception as e:
-        print(f"Erreur : {e}")
+        print(f"Error: {e}")
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("  SCENARIOS DE TEST — Systeme Multi-Agent")
+    print("  TEST SCENARIOS — Multi-Agent System")
     print("=" * 60)
-    print("\nCas simples :")
+    print("\nSimple cases:")
     for k in ["1", "2"]:
         print(f"  {k} — {SCENARIOS[k]['name']}")
-    print("\nShared State :")
+    print("\nShared State:")
     for k in ["3", "4"]:
         print(f"  {k} — {SCENARIOS[k]['name']}")
-    print("\nOPA :")
+    print("\nOPA:")
     for k in ["5", "6", "7"]:
         print(f"  {k} — {SCENARIOS[k]['name']}")
     print()
-    choice = input("Choisir scenario (1-7) : ")
+    choice = input("Select scenario (1-7): ")
     if choice in SCENARIOS:
         send_alert(SCENARIOS[choice])
     else:
-        print("Scenario invalide")
+        print("Invalid scenario")

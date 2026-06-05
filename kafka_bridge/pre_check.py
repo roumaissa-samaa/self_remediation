@@ -1,9 +1,9 @@
 import subprocess
 import json
-import logging
 import os
+from config.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("kafka.pre_check")
 
 _MCP_MODE = os.getenv("MCP_MODE", "mock")
 

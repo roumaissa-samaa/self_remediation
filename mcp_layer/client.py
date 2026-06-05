@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import time
 import concurrent.futures
 from dotenv import load_dotenv
 
@@ -8,6 +9,9 @@ load_dotenv(override=True)
 
 MCP_MODE       = os.getenv("MCP_MODE", "mock")
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8001/sse")
+
+_MCP_RETRIES = 3
+_MCP_RETRY_DELAY = 1.5
 
 
 async def _call_tool(tool: str, args: dict):
@@ -21,8 +25,21 @@ async def _call_tool(tool: str, args: dict):
 
 
 def _sync_call(tool: str, args: dict):
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, _call_tool(tool, args)).result()
+    import logging
+    last_exc = None
+    for attempt in range(1, _MCP_RETRIES + 1):
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, _call_tool(tool, args)).result()
+        except Exception as e:
+            last_exc = e
+            if attempt < _MCP_RETRIES:
+                logging.getLogger("mcp.client").warning(
+                    "MCP call '%s' failed (attempt %d/%d): %s — retrying in %.1fs",
+                    tool, attempt, _MCP_RETRIES, e, _MCP_RETRY_DELAY,
+                )
+                time.sleep(_MCP_RETRY_DELAY)
+    raise last_exc
 
 
 def get_logs(source: str = "platform") -> list:
@@ -67,6 +84,42 @@ def get_db_state() -> dict:
         from mcp_layer.mock_data import MOCK_DATA
         return MOCK_DATA["integration"]["db_state"]
     return _sync_call("get_db_state", {})
+
+
+def get_deployment_spec(name: str, namespace: str) -> dict:
+    if MCP_MODE == "mock":
+        from mcp_layer.mock_data import MOCK_DATA
+        return MOCK_DATA.get("deployment_specs", {}).get(name, {})
+    try:
+        return _sync_call("get_deployment_spec", {"name": name, "namespace": namespace})
+    except Exception as e:
+        import logging
+        logging.getLogger("mcp.client").warning(
+            "get_deployment_spec failed — continuing without spec: %s", e
+        )
+        return {}
+
+
+def get_pod_memory_peak(service: str, namespace: str) -> dict:
+    if MCP_MODE == "mock":
+        return {}
+    try:
+        return _sync_call("get_pod_memory_peak", {"service": service, "namespace": namespace})
+    except Exception as e:
+        import logging
+        logging.getLogger("mcp.client").warning("get_pod_memory_peak failed: %s", e)
+        return {}
+
+
+def get_configmap_any_namespace(name: str) -> dict:
+    if MCP_MODE == "mock":
+        return {}
+    try:
+        return _sync_call("get_configmap_any_namespace", {"name": name})
+    except Exception as e:
+        import logging
+        logging.getLogger("mcp.client").warning("get_configmap_any_namespace failed: %s", e)
+        return {}
 
 
 def execute_action(action: dict) -> dict:

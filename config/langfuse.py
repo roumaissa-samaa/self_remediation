@@ -33,7 +33,7 @@ def get_langfuse_handler():
         if pk and sk and host:
             return CallbackHandler(public_key=pk, secret_key=sk, host=host)
     except Exception as e:
-        print(f"[WARN] Langfuse handler non disponible : {e}")
+        print(f"[WARN] Langfuse handler unavailable: {e}")
     return None
 
 def trace_llm(name: str, input_text: str, output_text: str, model: str,
@@ -56,6 +56,6 @@ def trace_llm(name: str, input_text: str, output_text: str, model: str,
             }
         )
         client.flush()
-        print(f"Langfuse trace enregistre : {name}")
+        print(f"Langfuse trace recorded: {name}")
     except Exception as e:
-        print(f"Langfuse trace erreur : {e}")
+        print(f"Langfuse trace error: {e}")

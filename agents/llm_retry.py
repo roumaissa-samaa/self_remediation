@@ -8,6 +8,7 @@ log = get_logger("agent.llm_retry")
 
 _MAX_RETRIES = 4
 _BASE_DELAY  = 10.0
+_MAX_WAIT    = 120.0
 
 
 def _parse_wait_from_error(e: Exception) -> float | None:
@@ -58,7 +59,7 @@ def invoke_with_retry(llm, messages: list[BaseMessage], max_retries: int = _MAX_
 
             suggested = _parse_wait_from_error(e)
             if suggested:
-                wait   = suggested
+                wait   = min(suggested, _MAX_WAIT)
                 source = "header"
             else:
                 jitter = random.uniform(0, delay * 0.3)

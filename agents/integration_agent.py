@@ -89,7 +89,10 @@ def run_integration(state: AgentState) -> AgentState:
         }
 
     runbooks    = get_runbooks(f"Incident: {inc['alertname']}. Type: {obs.get('incident_type', '')}. Causes: {obs['incident_cause']} {obs.get('root_cause_hypothesis', '')}.")
-    cache_match = get_cache_match(f"Incident: {inc['alertname']}. Service: {inc['service']}. Causes: {obs['incident_cause']} {obs.get('root_cause_hypothesis', '')}.")
+    cache_match = get_cache_match(
+        f"Incident: {inc['alertname']}. Service: {inc['service']}. Causes: {obs['incident_cause']} {obs.get('root_cause_hypothesis', '')}.",
+        incident_type=obs.get("incident_type", ""),
+    )
 
     if comm.get("just_responded") == "platform":
         extra = comm.get("extra_data", {})

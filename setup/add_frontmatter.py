@@ -58,7 +58,7 @@ def add_frontmatter():
             continue
 
         if stem not in MAPPING:
-            print(f"  [INCONNU] {path.name} — non presente dans le mapping, ignoree")
+            print(f"  [UNKNOWN] {path.name} — not in mapping, skipped")
             unknown += 1
             continue
 
@@ -68,7 +68,7 @@ def add_frontmatter():
         print(f"  [OK] {path.name} -> type={inc_type}, agent={agent}")
         updated += 1
 
-    print(f"\nTermine — {updated} mis a jour, {skipped} deja traites, {unknown} inconnus")
+    print(f"\nDone — {updated} updated, {skipped} already processed, {unknown} unknown")
 
 
 if __name__ == "__main__":

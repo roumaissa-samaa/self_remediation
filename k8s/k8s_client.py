@@ -22,9 +22,27 @@ def _kubectl_json(args: list) -> dict | None:
     return None
 
 
+def _kubectl_top_pods(namespace: str) -> dict:
+    """Returns {pod_name: {cpu_usage, memory_usage}} — requires metrics-server."""
+    r = subprocess.run(
+        ["kubectl", "top", "pod", "-n", namespace, "--no-headers"],
+        capture_output=True, text=True, timeout=15,
+    )
+    if r.returncode != 0 or not r.stdout.strip():
+        return {}
+    result = {}
+    for line in r.stdout.strip().splitlines():
+        parts = line.split()
+        if len(parts) >= 3:
+            result[parts[0]] = {"cpu_usage": parts[1], "memory_usage": parts[2]}
+    return result
+
+
 def get_infra_state(source: str = "platform") -> dict:
     namespace = _NAMESPACE
     pods, nodes = [], []
+
+    top_by_pod = _kubectl_top_pods(namespace)
 
     pod_data = _kubectl_json(["get", "pods", "-n", namespace])
     if pod_data:
@@ -61,6 +79,9 @@ def get_infra_state(source: str = "platform") -> dict:
                 pod["terminated_reason"] = terminated_reason
             if exit_code is not None:
                 pod["exit_code"] = exit_code
+
+            if meta["name"] in top_by_pod:
+                pod.update(top_by_pod[meta["name"]])
 
             pods.append(pod)
 
@@ -140,6 +161,61 @@ def get_platform_config(agent_type: str) -> dict:
         "db_host":          os.getenv("DB_HOST", ""),
         "available_actions": [],
     }
+
+
+def get_deployment_spec(name: str, namespace: str) -> dict:
+    """Returns full container spec, env, envFrom, volumes and init containers from a deployment."""
+    data = _kubectl_json(["get", "deployment", name, "-n", namespace])
+    if not data:
+        return {}
+    pod_spec = data.get("spec", {}).get("template", {}).get("spec", {})
+    result = {
+        "containers":       [],
+        "init_containers":  [],
+        "volumes":          [],
+    }
+    for c in pod_spec.get("containers", []):
+        result["containers"].append({
+            "name":         c.get("name"),
+            "image":        c.get("image"),
+            "env":          c.get("env", []),
+            "envFrom":      c.get("envFrom", []),
+            "resources":    c.get("resources", {}),
+            "volumeMounts": c.get("volumeMounts", []),
+        })
+    for c in pod_spec.get("initContainers", []):
+        result["init_containers"].append({
+            "name":         c.get("name"),
+            "image":        c.get("image"),
+            "env":          c.get("env", []),
+            "envFrom":      c.get("envFrom", []),
+            "volumeMounts": c.get("volumeMounts", []),
+        })
+    for v in pod_spec.get("volumes", []):
+        result["volumes"].append(v)
+    return result
+
+
+def get_configmap_any_namespace(name: str) -> dict:
+    r = subprocess.run(
+        ["kubectl", "get", "configmap", "--all-namespaces", "-o", "json"],
+        capture_output=True, text=True, timeout=15,
+    )
+    if r.returncode != 0 or not r.stdout:
+        return {}
+    try:
+        data = json.loads(r.stdout)
+    except Exception:
+        return {}
+    result = {}
+    for item in data.get("items", []):
+        if item.get("metadata", {}).get("name") != name:
+            continue
+        ns = item.get("metadata", {}).get("namespace", "")
+        cm_data = item.get("data", {})
+        if cm_data:
+            result[ns] = cm_data
+    return result
 
 
 def get_jenkins_state() -> dict:

@@ -3,6 +3,7 @@ from qdrant_client.models import PointStruct
 from langchain_ollama import OllamaEmbeddings
 from orchestrator.state import AgentState
 from config.logger import get_logger
+from config.circuit_breaker import get_breaker
 import os, uuid
 from dotenv import load_dotenv
 
@@ -12,6 +13,7 @@ log = get_logger("agent.memory")
 
 client     = QdrantClient(url=os.getenv("QDRANT_URL"))
 embeddings = OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL"))
+_cb        = get_breaker("qdrant")
 
 
 def enrich_memory(state: AgentState) -> AgentState:
@@ -35,7 +37,11 @@ def enrich_memory(state: AgentState) -> AgentState:
         f"Actions: {actions_summary}"
     )
 
-    vector = embeddings.embed_query(text)
+    try:
+        vector = _cb.call(embeddings.embed_query, text)
+    except Exception as e:
+        log.warning("memory enrichment skipped — Qdrant unavailable", extra={"error": str(e)})
+        return {**state}
 
     memory_point = PointStruct(
         id=inc["incident_id"],
@@ -53,13 +59,13 @@ def enrich_memory(state: AgentState) -> AgentState:
     )
 
     try:
-        client.upsert(collection_name="memory", points=[memory_point])
+        _cb.call(client.upsert, collection_name="memory", points=[memory_point])
         log.info("memory enriched", extra={
             "incident_id": inc["incident_id"],
             "resolved":    exec_st["resolved"],
         })
     except Exception as e:
-        log.error("memory upsert error", extra={"error": str(e)})
+        log.warning("memory upsert skipped — Qdrant unavailable", extra={"error": str(e)})
 
     return {**state}
 
@@ -83,13 +89,17 @@ def write_to_cache(state: AgentState) -> None:
         f"Cause: {obs['incident_cause']}. "
         f"Actions: {actions_summary}"
     )
-    vector = embeddings.embed_query(text)
-
-    existing = client.query_points(
-        collection_name="semantic_cache",
-        query=vector,
-        limit=1,
-    ).points
+    try:
+        vector = _cb.call(embeddings.embed_query, text)
+        existing = _cb.call(
+            client.query_points,
+            collection_name="semantic_cache",
+            query=vector,
+            limit=1,
+        ).points
+    except Exception as e:
+        log.warning("semantic cache write skipped — Qdrant unavailable", extra={"error": str(e)})
+        return
 
     if existing and existing[0].score > 0.90:
         log.info("already in semantic cache — skip", extra={"score": round(existing[0].score, 2)})
@@ -108,7 +118,7 @@ def write_to_cache(state: AgentState) -> None:
         },
     )
     try:
-        client.upsert(collection_name="semantic_cache", points=[cache_point])
+        _cb.call(client.upsert, collection_name="semantic_cache", points=[cache_point])
         log.info("semantic cache enriched", extra={"incident_id": inc["incident_id"]})
     except Exception as e:
-        log.error("semantic cache upsert error", extra={"error": str(e)})
+        log.warning("semantic cache upsert skipped — Qdrant unavailable", extra={"error": str(e)})

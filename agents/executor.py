@@ -21,6 +21,8 @@ def _is_allowed_target(command: str, affected: list, service: str) -> bool:
     if not affected:
         return True
     cmd = command.lower()
+    if "create configmap" in cmd or "create secret" in cmd:
+        return True
     if service and service.lower() in cmd:
         return True
     for c in affected:
@@ -85,8 +87,13 @@ def execute_plan(state: AgentState) -> AgentState:
             all_ok = False
 
         if result.get("status") == "error":
-            log.error("command failed", extra={"index": i, "error": result.get("detail")})
-            all_ok = False
+            detail = result.get("detail", "")
+            if "delete" in command.lower() and "NotFound" in detail:
+                log.info("command treated as success (already deleted)", extra={"index": i, "command": command})
+                result = {"status": "success", "detail": "already deleted (NotFound treated as success)"}
+            else:
+                log.error("command failed", extra={"index": i, "error": detail})
+                all_ok = False
         else:
             log.info("command success", extra={"index": i, "result": result})
 
@@ -106,6 +113,8 @@ def execute_plan(state: AgentState) -> AgentState:
     success_count = sum(1 for r in results if r.get("status") == "success")
     resolved      = all_ok and success_count > 0 and success_count == len(results)
 
+    exec_error = results[-1].get("detail", "") if not resolved and results else ""
+
     log.info("execution complete", extra={
         "resolved":      resolved,
         "success_count": success_count,
@@ -119,5 +128,6 @@ def execute_plan(state: AgentState) -> AgentState:
             "execution_result": results,
             "audit_trail":      exec_st.get("audit_trail", []) + new_entries,
             "resolved":         resolved,
+            "exec_error":       exec_error,
         },
     }

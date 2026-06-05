@@ -53,6 +53,7 @@ def _parse_command(command: str) -> dict:
                 parsed["target"] = part
                 break
 
+        patch_content = ""
         for i, part in enumerate(parts):
             if part in ("-n", "--namespace") and i + 1 < len(parts):
                 parsed["namespace"] = parts[i + 1]
@@ -63,6 +64,11 @@ def _parse_command(command: str) -> dict:
                     parsed["replicas"] = int(part.split("=")[1])
                 except ValueError:
                     pass
+            elif part in ("-p", "--patch") and i + 1 < len(parts):
+                patch_content = parts[i + 1]
+            elif part.startswith("--patch="):
+                patch_content = part.split("=", 1)[1]
+        parsed["patch_content"] = patch_content
 
     elif tool == "jenkins-cli" and len(parts) > 1:
         parsed["verb"] = parts[1]
@@ -126,16 +132,17 @@ def validate_plan(state: AgentState) -> AgentState:
         parsed  = _parse_command(command)
 
         opa_input = {
-            "agent":     agent,
-            "command":   command,
-            "tool":      parsed["tool"],
-            "verb":      parsed["verb"],
-            "subverb":   parsed["subverb"],
-            "resource":  parsed["resource"],
-            "target":    parsed["target"],
-            "namespace": parsed["namespace"],
-            "replicas":  parsed["replicas"],
-            "reason":    action_item.get("reason", ""),
+            "agent":         agent,
+            "command":       command,
+            "tool":          parsed["tool"],
+            "verb":          parsed["verb"],
+            "subverb":       parsed["subverb"],
+            "resource":      parsed["resource"],
+            "target":        parsed["target"],
+            "namespace":     parsed["namespace"],
+            "replicas":      parsed["replicas"],
+            "patch_content": parsed.get("patch_content", ""),
+            "reason":        action_item.get("reason", ""),
         }
         approved, reason = _call_opa(opa_url, opa_input)
 

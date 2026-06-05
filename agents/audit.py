@@ -1,6 +1,7 @@
 from elasticsearch import Elasticsearch
 from orchestrator.state import AgentState
 from config.logger import get_logger
+from config.circuit_breaker import get_breaker
 from datetime import datetime
 import os, json
 from dotenv import load_dotenv
@@ -9,6 +10,7 @@ load_dotenv()
 
 log = get_logger("agent.audit")
 es  = Elasticsearch(os.getenv("ELASTICSEARCH_URL"))
+_cb = get_breaker("elasticsearch", failure_threshold=3, recovery_timeout=30.0)
 
 
 def record_audit(state: AgentState) -> AgentState:
@@ -31,26 +33,15 @@ def record_audit(state: AgentState) -> AgentState:
         "opa_reason":       opa_st["reason"],
         "retry_count":      opa_st["retry_count"],
         "execution_result": json.dumps(exec_st["execution_result"]),
-        "resolved":         False,
+        "resolved":         exec_st.get("post_check_confirmed", False),
         "timestamp":        datetime.utcnow().isoformat(),
     }
 
     try:
-        es.index(index="audit_trail", id=inc["incident_id"], document=doc)
+        _cb.call(es.index, index="audit_trail", id=inc["incident_id"], document=doc)
         log.info("audit recorded", extra={"incident_id": inc["incident_id"]})
     except Exception as e:
-        log.error("audit ELK error", extra={"error": str(e)})
+        log.warning("audit skipped — Elasticsearch unavailable", extra={"error": str(e)})
 
     return {**state}
 
-
-def update_audit_resolved(incident_id: str, confirmed: bool) -> None:
-    try:
-        es.update(
-            index="audit_trail",
-            id=incident_id,
-            body={"doc": {"resolved": confirmed}},
-        )
-        log.info("audit resolved updated", extra={"incident_id": incident_id, "resolved": confirmed})
-    except Exception as e:
-        log.error("audit update ELK error", extra={"error": str(e)})

@@ -1,6 +1,6 @@
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
-from mcp_layer.client import get_logs, get_metrics, get_infra_state
+from mcp_layer.client import get_logs, get_metrics, get_infra_state, get_pod_memory_peak
 from orchestrator.state import AgentState
 from config.langfuse import trace_llm
 from config.prompts import load_prompt
@@ -62,6 +62,10 @@ def run_observability(state: AgentState) -> AgentState:
     metrics_integration = get_metrics("integration")
     infra_integration   = get_infra_state("integration")
 
+    memory_peak = get_pod_memory_peak(inc["service"], inc["namespace"])
+    if memory_peak:
+        metrics_platform = {**metrics_platform, "memory_peak": memory_peak}
+        log.info("memory peak fetched at observability", extra={"service": inc["service"], **memory_peak})
 
     system, user = load_prompt(
         "observability.j2",
@@ -113,21 +117,13 @@ def run_observability(state: AgentState) -> AgentState:
 
     incident_type = classification.get("incident_type", "")
 
-    metric_overlap = set(metrics_platform) & set(metrics_integration)
-    if metric_overlap:
-        log.warning("metric key conflict: integration overwrites platform values", extra={"keys": sorted(metric_overlap)})
-
-    infra_overlap = set(infra_platform) & set(infra_integration)
-    if infra_overlap:
-        log.warning("infra_state key conflict: integration overwrites platform values", extra={"keys": sorted(infra_overlap)})
-
     return {
         **state,
         "obs": {
             **state.get("obs", {}),
             "logs":                  logs_platform + logs_integration,
-            "metrics":               {**metrics_platform, **metrics_integration},
-            "infra_state":           {**infra_platform, **infra_integration},
+            "metrics":               {**metrics_integration, **metrics_platform},
+            "infra_state":           {**infra_integration, **infra_platform},
             "incident_type":         incident_type,
             "incident_cause":        classification.get("incident_cause", ""),
             "root_cause_hypothesis": classification.get("root_cause_hypothesis", ""),

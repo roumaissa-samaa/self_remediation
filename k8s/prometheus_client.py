@@ -81,3 +81,50 @@ def get_metrics(source: str = "platform") -> dict:
             metrics[name] = {}
 
     return metrics
+
+
+def get_pod_memory_peak(service: str, namespace: str) -> dict:
+    """Peak memory usage (working set) for pods matching the service.
+
+    Tries max_over_time[1h] first. Falls back to an instant query because
+    OOMKilled pods often run too briefly for Prometheus to accumulate 1h of data.
+    """
+    selector = f'namespace="{namespace}",pod=~"{service}-[a-z0-9]+-[a-z0-9]+"'
+
+    def _query_peak(promql: str, window: str) -> dict:
+        resp = requests.get(
+            f"{_PROMETHEUS_URL}/api/v1/query",
+            params={"query": promql},
+            timeout=5,
+        )
+        if not resp.ok:
+            return {}
+        results = resp.json().get("data", {}).get("result", [])
+        if not results:
+            return {}
+        peak_bytes = max(float(r["value"][1]) for r in results if r.get("value"))
+        return {
+            "peak_memory_bytes": peak_bytes,
+            "peak_memory_human": f"{peak_bytes / (1024 * 1024):.0f}Mi",
+            "window": window,
+        }
+
+    try:
+        result = _query_peak(
+            f'max_over_time(container_memory_working_set_bytes{{{selector}}}[1h])', "1h"
+        )
+        if result:
+            return result
+
+        # Fallback: instant query — pod may be running between CrashLoop restarts
+        result = _query_peak(
+            f'container_memory_working_set_bytes{{{selector}}}', "instant"
+        )
+        if result:
+            log.info("prometheus peak memory: using instant fallback", extra={"service": service})
+            return result
+
+        log.warning("prometheus peak memory: no data", extra={"service": service, "namespace": namespace})
+    except Exception as e:
+        log.warning("prometheus peak memory error", extra={"service": service, "error": str(e)})
+    return {}

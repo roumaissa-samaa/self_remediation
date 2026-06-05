@@ -46,13 +46,17 @@ class OPAState(TypedDict):
     approved:    bool
     reason:      str
     retry_count: int
+    blocked:     bool
 
 
 class ExecutionState(TypedDict):
-    remediation_plan: list
-    execution_result: dict
-    audit_trail:      list
-    resolved:         bool
+    remediation_plan:     list
+    initial_plan:         list
+    execution_result:     dict
+    audit_trail:          list
+    resolved:             bool
+    exec_error:           str
+    post_check_confirmed: bool
 
 
 class AgentState(TypedDict):
@@ -63,3 +67,4 @@ class AgentState(TypedDict):
     comm:        CommunicationState
     opa:         OPAState
     execution:   ExecutionState
+    timings:     dict

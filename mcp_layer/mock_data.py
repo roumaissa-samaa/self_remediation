@@ -111,5 +111,35 @@ MOCK_DATA = {
             "available_actions": ["retrigger_build", "restart_service",
                                   "clear_cache", "restart_db_connection"]
         }
+    },
+
+    "deployment_specs": {
+        "config-error-demo": {
+            "containers": [
+                {
+                    "name":  "config-error-demo",
+                    "image": "nginx:1.25",
+                    "env": [
+                        {
+                            "name": "APP_PORT",
+                            "valueFrom": {"configMapKeyRef": {"name": "nonexistent-config", "key": "APP_PORT"}}
+                        },
+                        {
+                            "name": "APP_ENV",
+                            "valueFrom": {"configMapKeyRef": {"name": "nonexistent-config", "key": "APP_ENV"}}
+                        },
+                        {
+                            "name": "LOG_LEVEL",
+                            "valueFrom": {"configMapKeyRef": {"name": "nonexistent-config", "key": "LOG_LEVEL"}}
+                        }
+                    ],
+                    "envFrom":      [],
+                    "resources":    {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "200m", "memory": "256Mi"}},
+                    "volumeMounts": []
+                }
+            ],
+            "init_containers": [],
+            "volumes": []
+        }
     }
 }

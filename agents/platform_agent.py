@@ -1,6 +1,6 @@
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
-from mcp_layer.client import get_platform_config, get_infra_state
+from mcp_layer.client import get_platform_config, get_infra_state, get_deployment_spec, get_pod_memory_peak, get_configmap_any_namespace
 from agents.memory import get_runbooks, get_cache_match
 from orchestrator.state import AgentState
 from config.langfuse import trace_llm
@@ -52,6 +52,48 @@ def _print_plan(mode: str, plan: list) -> None:
     print(f"{sep}\n")
 
 
+def _extract_configmap_refs(deployment_spec: dict) -> set:
+    names = set()
+    for c in deployment_spec.get("containers", []) + deployment_spec.get("init_containers", []):
+        for ef in c.get("envFrom", []):
+            ref = ef.get("configMapRef", {}).get("name")
+            if ref:
+                names.add(ref)
+        for e in c.get("env", []):
+            ref = e.get("valueFrom", {}).get("configMapKeyRef", {}).get("name")
+            if ref:
+                names.add(ref)
+    for v in deployment_spec.get("volumes", []):
+        ref = v.get("configMap", {}).get("name")
+        if ref:
+            names.add(ref)
+    return names
+
+
+def _rollout_revision_count(k8s: dict, service: str) -> int:
+    deployment = next((d for d in k8s.get("deployments", []) if d["name"] == service), None)
+    if not deployment:
+        return 0
+    return len(deployment.get("rollout_history", []))
+
+
+def _cache_usable(cache_match: dict | None, k8s: dict, service: str) -> dict | None:
+    if not cache_match:
+        return None
+    plan = cache_match.get("remediation", [])
+    uses_undo = any("rollout undo" in str(a.get("command", "")) for a in plan)
+    if not uses_undo:
+        return cache_match
+    deployment = next(
+        (d for d in k8s.get("deployments", []) if d["name"] == service),
+        None,
+    )
+    if deployment and len(deployment.get("rollout_history", [])) <= 1:
+        log.info("cache discarded: rollout undo suggested but deployment has no prior revision", extra={"service": service})
+        return None
+    return cache_match
+
+
 def run_platform(state: AgentState) -> AgentState:
     inc  = state["incident"]
     obs  = state["obs"]
@@ -62,6 +104,29 @@ def run_platform(state: AgentState) -> AgentState:
     config = get_platform_config("platform")
     logs   = obs.get("logs", [])
     metrics = obs.get("metrics", {})
+
+    memory_peak = metrics.get("memory_peak") or get_pod_memory_peak(inc["service"], inc["namespace"])
+    if memory_peak and "memory_peak" not in metrics:
+        metrics = {**metrics, "memory_peak": memory_peak}
+        log.info("memory peak fetched (platform fallback)", extra={"service": inc["service"], **memory_peak})
+
+    deployment_spec = get_deployment_spec(inc["service"], inc["namespace"])
+    if deployment_spec:
+        log.info("deployment spec loaded", extra={
+            "service":    inc["service"],
+            "containers": [c.get("name") for c in deployment_spec.get("containers", [])],
+            "volumes":    [v.get("name") for v in deployment_spec.get("volumes", [])],
+        })
+    else:
+        log.warning("deployment spec not found", extra={"service": inc["service"], "namespace": inc["namespace"]})
+
+    found_configmaps = {}
+    if deployment_spec:
+        for cm_name in _extract_configmap_refs(deployment_spec):
+            found = get_configmap_any_namespace(cm_name)
+            if found:
+                found_configmaps[cm_name] = found
+                log.info("configmap found in other namespaces", extra={"cm_name": cm_name, "namespaces": list(found.keys())})
 
     if comm.get("responding_agent") == "platform":
         log.info("platform responding to integration with K8s data", extra={
@@ -86,7 +151,15 @@ def run_platform(state: AgentState) -> AgentState:
         }
 
     runbooks    = get_runbooks(f"Incident: {inc['alertname']}. Type: {obs.get('incident_type', '')}. Causes: {obs['incident_cause']} {obs.get('root_cause_hypothesis', '')}.")
-    cache_match = get_cache_match(f"Incident: {inc['alertname']}. Service: {inc['service']}. Causes: {obs['incident_cause']} {obs.get('root_cause_hypothesis', '')}.")
+    cache_match = _cache_usable(
+        get_cache_match(
+            f"Incident: {inc['alertname']}. Service: {inc['service']}. Causes: {obs['incident_cause']} {obs.get('root_cause_hypothesis', '')}.",
+            incident_type=obs.get("incident_type", ""),
+        ),
+        k8s,
+        inc["service"],
+    )
+    rollout_revisions = _rollout_revision_count(k8s, inc["service"])
 
     if comm.get("just_responded") == "integration":
         extra = comm.get("extra_data", {})
@@ -110,6 +183,9 @@ def run_platform(state: AgentState) -> AgentState:
             extra=extra,
             runbooks=runbooks,
             cache_match=cache_match,
+            deployment_spec=deployment_spec,
+            rollout_revisions=rollout_revisions,
+            found_configmaps=found_configmaps,
         )
 
         response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)])
@@ -125,10 +201,15 @@ def run_platform(state: AgentState) -> AgentState:
         _print_plan("shared (integration data)", plan)
         log.info("platform shared plan sent to OPA", extra={"action_count": len(plan)})
 
+        _exec = state.get("execution", {})
         return {
             **state,
             "platform":  {"k8s_state": k8s, "config": config},
-            "execution": {**state.get("execution", {}), "remediation_plan": plan},
+            "execution": {
+                **_exec,
+                "remediation_plan": plan,
+                "initial_plan": _exec.get("initial_plan") or plan,
+            },
             "comm": {
                 **comm,
                 "active_agent":    "platform",
@@ -160,6 +241,9 @@ def run_platform(state: AgentState) -> AgentState:
             cache_match=cache_match,
             refused_plan=state.get("execution", {}).get("remediation_plan", []),
             opa_reason=opa.get("reason"),
+            deployment_spec=deployment_spec,
+            rollout_revisions=rollout_revisions,
+            found_configmaps=found_configmaps,
         )
 
         response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)])
@@ -175,10 +259,15 @@ def run_platform(state: AgentState) -> AgentState:
         _print_plan("post-OPA revision", plan)
         log.info("platform revised plan sent to OPA", extra={"action_count": len(plan)})
 
+        _exec = state.get("execution", {})
         return {
             **state,
             "platform":  {"k8s_state": k8s, "config": config},
-            "execution": {**state.get("execution", {}), "remediation_plan": plan},
+            "execution": {
+                **_exec,
+                "remediation_plan": plan,
+                "initial_plan": _exec.get("initial_plan") or plan,
+            },
             "comm": {
                 **comm,
                 "active_agent":    "platform",
@@ -211,6 +300,9 @@ def run_platform(state: AgentState) -> AgentState:
         logs=logs,
         runbooks=runbooks,
         cache_match=cache_match,
+        deployment_spec=deployment_spec,
+        rollout_revisions=rollout_revisions,
+        found_configmaps=found_configmaps,
     )
 
     response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)])
@@ -245,10 +337,15 @@ def run_platform(state: AgentState) -> AgentState:
         "commands": [a.get("command") for a in plan],
     })
 
+    _exec = state.get("execution", {})
     return {
         **state,
         "platform":  {"k8s_state": k8s, "config": config},
-        "execution": {**state.get("execution", {}), "remediation_plan": plan},
+        "execution": {
+            **_exec,
+            "remediation_plan": plan,
+            "initial_plan": _exec.get("initial_plan") or plan,
+        },
         "comm": {
             **comm,
             "active_agent":    "platform",

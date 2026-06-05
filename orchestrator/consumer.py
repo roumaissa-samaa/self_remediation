@@ -1,3 +1,5 @@
+import re
+
 from kafka import KafkaConsumer
 import json
 import os
@@ -6,9 +8,6 @@ import logging
 import traceback
 from dotenv import load_dotenv
 from orchestrator.graph import run_pipeline
-from orchestrator.post_check import verify_remediation
-from agents.audit import update_audit_resolved
-from agents.memory_writer import write_to_cache
 
 _SEP = "═" * 58
 
@@ -20,24 +19,52 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Reduce noise from Kafka internal logs
 logging.getLogger("kafka").setLevel(logging.WARNING)
 
-_MAX_RETRIES       = 3
-_RETRY_DELAYS      = [int(x.strip()) for x in os.getenv("CONSUMER_RETRY_DELAYS", "2,5,10").split(",")]
-# How long to suppress re-fires of the same alert after a successful resolution
-_FINGERPRINT_TTL   = float(os.getenv("FINGERPRINT_TTL_S", "300"))
+_MAX_RETRIES     = 3
+_RETRY_DELAYS    = [int(x.strip()) for x in os.getenv("CONSUMER_RETRY_DELAYS", "2,5,10").split(",")]
+_FINGERPRINT_TTL = float(os.getenv("FINGERPRINT_TTL_S", "300"))
+_STATE_FILE      = os.getenv("CONSUMER_STATE_FILE", ".consumer_state.json")
 
 _seen_ids: set[str] = set()
 _active_fingerprints: set[str] = set()
-_resolved_fingerprints: dict[str, float] = {}   # fingerprint → resolved_at timestamp
+_resolved_fingerprints: dict[str, float] = {}
+
+
+def _persist_state() -> None:
+    try:
+        now    = time.time()
+        active = {fp: ts for fp, ts in _resolved_fingerprints.items() if now - ts < _FINGERPRINT_TTL}
+        with open(_STATE_FILE, "w") as f:
+            json.dump({"seen_ids": list(_seen_ids), "resolved_fingerprints": active}, f)
+    except Exception as e:
+        logger.warning("Could not persist consumer state: %s", e)
+
+
+def _restore_state() -> None:
+    try:
+        if not os.path.exists(_STATE_FILE):
+            return
+        with open(_STATE_FILE) as f:
+            data = json.load(f)
+        now = time.time()
+        _seen_ids.update(data.get("seen_ids", []))
+        for fp, ts in data.get("resolved_fingerprints", {}).items():
+            if now - ts < _FINGERPRINT_TTL:
+                _resolved_fingerprints[fp] = ts
+        logger.info(
+            "Consumer state restored: %d seen IDs, %d active fingerprints",
+            len(_seen_ids), len(_resolved_fingerprints),
+        )
+    except Exception as e:
+        logger.warning("Could not restore consumer state: %s", e)
+
+
+_K8S_POD_SUFFIX = re.compile(r'-[a-z0-9]{8,10}-[a-z0-9]{5}$')
 
 
 def _deployment_name(service: str) -> str:
-    parts = service.split("-")
-    if len(parts) >= 3:
-        return "-".join(parts[:-2])
-    return service
+    return _K8S_POD_SUFFIX.sub('', service)
 
 
 def _fingerprint(incident: dict) -> str:
@@ -57,9 +84,7 @@ def _process_incident(incident: dict) -> None:
         return
 
     if fp in _active_fingerprints:
-        logger.warning(
-            "Incident %s skipped — [%s] is already being processed", incident_id, fp
-        )
+        logger.warning("Incident %s skipped — [%s] is already being processed", incident_id, fp)
         return
 
     if fp in _resolved_fingerprints:
@@ -70,7 +95,6 @@ def _process_incident(incident: dict) -> None:
                 incident_id, fp, age, _FINGERPRINT_TTL,
             )
             return
-        # TTL expired — allow re-processing (alert may have re-fired for real)
         del _resolved_fingerprints[fp]
 
     _active_fingerprints.add(fp)
@@ -79,38 +103,39 @@ def _process_incident(incident: dict) -> None:
     try:
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
+                t_start     = time.time()
                 final_state = run_pipeline(incident)
+                elapsed     = time.time() - t_start
+
                 _seen_ids.add(incident_id)
-                logger.info("Incident %s processed successfully (attempt %d)", incident_id, attempt)
-                exec_st = (final_state or {}).get("execution", {})
-                comm_st = (final_state or {}).get("comm", {})
-                opa_st  = (final_state or {}).get("opa", {})
-                plan    = exec_st.get("remediation_plan", [])
-                agent   = comm_st.get("active_agent", "?")
-                n_ok    = sum(1 for r in (exec_st.get("execution_result") or []) if r.get("status") == "success")
+                logger.info("Incident %s processed (attempt %d) in %.1fs", incident_id, attempt, elapsed)
 
-                confirmed = verify_remediation(
-                    incident.get("service", ""),
-                    incident.get("namespace", "default"),
-                    incident_id,
-                )
-
-                update_audit_resolved(incident_id, confirmed)
-                if confirmed:
-                    write_to_cache(final_state)
+                exec_st   = (final_state or {}).get("execution", {})
+                opa_st    = (final_state or {}).get("opa", {})
+                comm_st   = (final_state or {}).get("comm", {})
+                agent     = comm_st.get("active_agent", "?")
+                confirmed = exec_st.get("post_check_confirmed", False)
 
                 print(f"\n{_SEP}")
-                if confirmed:
-                    print(f"  RESULT  →  ✓ RESOLVED  |  Agent: {agent}  |  {n_ok}/{len(plan)} actions OK")
+                if opa_st.get("blocked", False):
+                    print(f"  RESULT  →  ✗ OPA BLOCKED   |  Agent: {agent}  |  {elapsed:.1f}s")
+                elif exec_st.get("exec_error"):
+                    print(f"  RESULT  →  ✗ EXEC FAILED   |  Agent: {agent}  |  {exec_st['exec_error'][:80]}")
+                elif confirmed:
+                    n_ok = sum(1 for r in (exec_st.get("execution_result") or []) if r.get("status") == "success")
+                    plan = exec_st.get("remediation_plan", [])
+                    print(f"  RESULT  →  ✓ RESOLVED      |  Agent: {agent}  |  {n_ok}/{len(plan)} actions OK  |  {elapsed:.1f}s")
                 else:
-                    print(f"  RESULT  →  ✗ UNRESOLVED  |  Agent: {agent}  |  post-check FAILED")
+                    print(f"  RESULT  →  ✗ UNRESOLVED    |  Agent: {agent}  |  post-check FAILED  |  {elapsed:.1f}s")
                 print(f"{_SEP}\n")
 
                 if confirmed and fp not in _resolved_fingerprints:
                     _resolved_fingerprints[fp] = time.time()
                 elif not confirmed and fp in _resolved_fingerprints:
                     del _resolved_fingerprints[fp]
+                _persist_state()
                 return
+
             except Exception as exc:
                 last_error = exc
                 logger.warning(
@@ -127,8 +152,20 @@ def _process_incident(incident: dict) -> None:
             incident_id, _MAX_RETRIES, last_error,
             json.dumps(incident, ensure_ascii=False)
         )
+        try:
+            from agents.notifier import notify_unresolved
+            notify_unresolved(
+                incident_id=incident_id,
+                service=incident.get("service", ""),
+                namespace=incident.get("namespace", ""),
+                cause=incident.get("message", "unknown cause"),
+                error_detail=f"Pipeline failed after {_MAX_RETRIES} attempts: {last_error}",
+            )
+        except Exception as notify_exc:
+            logger.error("Failed to notify about abandoned incident: %s", notify_exc)
     finally:
         _active_fingerprints.discard(fp)
+        _persist_state()
 
 
 def start_consumer():
@@ -140,6 +177,7 @@ def start_consumer():
         auto_offset_reset="latest"
     )
 
+    _restore_state()
     logger.info("Kafka consumer started — waiting for incidents...")
 
     try:

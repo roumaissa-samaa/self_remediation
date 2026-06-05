@@ -5,21 +5,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-assert os.getenv("QDRANT_URL"), "QDRANT_URL manquante dans les variables d'environnement"
+assert os.getenv("QDRANT_URL"), "QDRANT_URL missing from environment variables"
 
-print("ATTENTION : cette opération va supprimer et recréer toutes les collections Qdrant.")
-print("Toutes les données (mémoire, RAG, cache) seront effacées.")
-confirm = input("Taper 'OUI' pour confirmer : ")
-if confirm != "OUI":
-    print("Annulé.")
+print("WARNING: this operation will delete and recreate all Qdrant collections.")
+print("All data (memory, RAG, cache) will be erased.")
+confirm = input("Type 'YES' to confirm: ")
+if confirm != "YES":
+    print("Cancelled.")
     exit(0)
 
 client = QdrantClient(url=os.getenv("QDRANT_URL"))
 
 collections = [
-    ("memory",         "Historique incidents et mémoire agents"),
-    ("documents",      "Base de connaissance RAG documentaire"),
-    ("semantic_cache", "Cache sémantique des réponses LLM"),
+    ("memory",         "Incident history and agent memory"),
+    ("documents",      "RAG knowledge base"),
+    ("semantic_cache", "LLM semantic response cache"),
 ]
 
 for name, description in collections:
@@ -30,6 +30,6 @@ for name, description in collections:
             distance=Distance.COSINE
         )
     )
-    print(f"Collection '{name}' créée — {description}")
+    print(f"Collection '{name}' created — {description}")
 
-print("\n Toutes les collections Qdrant sont prêtes !")
+print("\n All Qdrant collections are ready!")
