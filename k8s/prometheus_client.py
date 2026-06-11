@@ -84,11 +84,6 @@ def get_metrics(source: str = "platform") -> dict:
 
 
 def get_pod_memory_peak(service: str, namespace: str) -> dict:
-    """Peak memory usage (working set) for pods matching the service.
-
-    Tries max_over_time[1h] first. Falls back to an instant query because
-    OOMKilled pods often run too briefly for Prometheus to accumulate 1h of data.
-    """
     selector = f'namespace="{namespace}",pod=~"{service}-[a-z0-9]+-[a-z0-9]+"'
 
     def _query_peak(promql: str, window: str) -> dict:

@@ -68,7 +68,7 @@ def verify_remediation(service: str, namespace: str, incident_id: str) -> bool:
 
         r2 = subprocess.run(
             ["kubectl", "get", "pods", "-n", namespace,
-             "-l", f"app={deployment}", "-o", "json"],
+            "-l", f"app={deployment}", "-o", "json"],
             capture_output=True, text=True, timeout=15,
         )
         if r2.returncode == 0:

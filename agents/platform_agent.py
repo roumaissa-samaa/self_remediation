@@ -1,6 +1,6 @@
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
-from mcp_layer.client import get_platform_config, get_infra_state, get_deployment_spec, get_pod_memory_peak, get_configmap_any_namespace
+from mcp_layer.client import get_platform_config, get_infra_state, get_deployment_spec, get_pod_memory_peak, get_configmap_any_namespace, get_configmap_refs, get_rollout_revision_count
 from agents.memory import get_runbooks, get_cache_match
 from orchestrator.state import AgentState
 from config.langfuse import trace_llm
@@ -48,50 +48,9 @@ def _print_plan(mode: str, plan: list) -> None:
         print(f"  [{i}] {a.get('command', '?')}")
         reason = a.get("reason", "")
         if reason:
-            print(f"       {reason[:112]}")
+            print(f"       {reason}")
     print(f"{sep}\n")
 
-
-def _extract_configmap_refs(deployment_spec: dict) -> set:
-    names = set()
-    for c in deployment_spec.get("containers", []) + deployment_spec.get("init_containers", []):
-        for ef in c.get("envFrom", []):
-            ref = ef.get("configMapRef", {}).get("name")
-            if ref:
-                names.add(ref)
-        for e in c.get("env", []):
-            ref = e.get("valueFrom", {}).get("configMapKeyRef", {}).get("name")
-            if ref:
-                names.add(ref)
-    for v in deployment_spec.get("volumes", []):
-        ref = v.get("configMap", {}).get("name")
-        if ref:
-            names.add(ref)
-    return names
-
-
-def _rollout_revision_count(k8s: dict, service: str) -> int:
-    deployment = next((d for d in k8s.get("deployments", []) if d["name"] == service), None)
-    if not deployment:
-        return 0
-    return len(deployment.get("rollout_history", []))
-
-
-def _cache_usable(cache_match: dict | None, k8s: dict, service: str) -> dict | None:
-    if not cache_match:
-        return None
-    plan = cache_match.get("remediation", [])
-    uses_undo = any("rollout undo" in str(a.get("command", "")) for a in plan)
-    if not uses_undo:
-        return cache_match
-    deployment = next(
-        (d for d in k8s.get("deployments", []) if d["name"] == service),
-        None,
-    )
-    if deployment and len(deployment.get("rollout_history", [])) <= 1:
-        log.info("cache discarded: rollout undo suggested but deployment has no prior revision", extra={"service": service})
-        return None
-    return cache_match
 
 
 def run_platform(state: AgentState) -> AgentState:
@@ -121,12 +80,11 @@ def run_platform(state: AgentState) -> AgentState:
         log.warning("deployment spec not found", extra={"service": inc["service"], "namespace": inc["namespace"]})
 
     found_configmaps = {}
-    if deployment_spec:
-        for cm_name in _extract_configmap_refs(deployment_spec):
-            found = get_configmap_any_namespace(cm_name)
-            if found:
-                found_configmaps[cm_name] = found
-                log.info("configmap found in other namespaces", extra={"cm_name": cm_name, "namespaces": list(found.keys())})
+    for cm_name in get_configmap_refs(inc["service"], inc["namespace"]):
+        found = get_configmap_any_namespace(cm_name)
+        if found:
+            found_configmaps[cm_name] = found
+            log.info("configmap found in other namespaces", extra={"cm_name": cm_name, "namespaces": list(found.keys())})
 
     if comm.get("responding_agent") == "platform":
         log.info("platform responding to integration with K8s data", extra={
@@ -151,15 +109,11 @@ def run_platform(state: AgentState) -> AgentState:
         }
 
     runbooks    = get_runbooks(f"Incident: {inc['alertname']}. Type: {obs.get('incident_type', '')}. Causes: {obs['incident_cause']} {obs.get('root_cause_hypothesis', '')}.")
-    cache_match = _cache_usable(
-        get_cache_match(
-            f"Incident: {inc['alertname']}. Service: {inc['service']}. Causes: {obs['incident_cause']} {obs.get('root_cause_hypothesis', '')}.",
-            incident_type=obs.get("incident_type", ""),
-        ),
-        k8s,
-        inc["service"],
+    cache_match = get_cache_match(
+        f"Incident: {inc['alertname']}. Service: {inc['service']}. Causes: {obs['incident_cause']} {obs.get('root_cause_hypothesis', '')}.",
+        incident_type=obs.get("incident_type", ""),
     )
-    rollout_revisions = _rollout_revision_count(k8s, inc["service"])
+    rollout_revisions = get_rollout_revision_count(inc["service"], inc["namespace"])
 
     if comm.get("just_responded") == "integration":
         extra = comm.get("extra_data", {})
@@ -191,7 +145,7 @@ def run_platform(state: AgentState) -> AgentState:
         response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)])
         log.info("platform shared plan built", extra={"preview": response.content[:200]})
         trace_llm(name="platform_agent", input_text=user, output_text=response.content,
-                  model=os.getenv("GROQ_MODEL"), session_id=inc["incident_id"])
+                model=os.getenv("GROQ_MODEL"), session_id=inc["incident_id"])
 
         parsed = _parse_llm_json(response.content, "platform shared")
         plan = parsed.get("actions")
@@ -249,7 +203,7 @@ def run_platform(state: AgentState) -> AgentState:
         response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)])
         log.info("platform revised plan", extra={"preview": response.content[:200]})
         trace_llm(name="platform_agent", input_text=user, output_text=response.content,
-                  model=os.getenv("GROQ_MODEL"), session_id=inc["incident_id"])
+                model=os.getenv("GROQ_MODEL"), session_id=inc["incident_id"])
 
         parsed = _parse_llm_json(response.content, "platform revision")
         plan = parsed.get("actions")
@@ -308,7 +262,7 @@ def run_platform(state: AgentState) -> AgentState:
     response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)])
     log.info("platform LLM decision", extra={"preview": response.content[:300]})
     trace_llm(name="platform_agent", input_text=user, output_text=response.content,
-              model=os.getenv("GROQ_MODEL"), session_id=inc["incident_id"])
+            model=os.getenv("GROQ_MODEL"), session_id=inc["incident_id"])
 
     result = _parse_llm_json(response.content, "platform normal") or {"needs_more_data": False}
 

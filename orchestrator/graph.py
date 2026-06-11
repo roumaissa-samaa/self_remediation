@@ -97,7 +97,7 @@ def opa_decision(state: AgentState) -> str:
     log.info("OPA decision", extra={"approved": opa["approved"], "retry": opa["retry_count"]})
     if opa["approved"]:
         return "execute"
-    if opa["retry_count"] >= int(os.getenv("OPA_MAX_RETRIES", "2")):
+    if opa["retry_count"] >= int(os.getenv("OPA_MAX_RETRIES", "5")):
         return "block"
     log.warning("OPA refused — revising", extra={"agent": active})
     return f"revise_{active}"
@@ -155,7 +155,7 @@ def build_graph():
     graph.add_edge("notify_unresolved", "audit")
     graph.add_edge("audit",             "enrich_memory")
     graph.add_edge("enrich_memory",     END)
-    graph.add_edge("block",             "enrich_memory")
+    graph.add_edge("block",             "audit")
 
     return graph.compile()
 

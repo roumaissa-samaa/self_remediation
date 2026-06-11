@@ -52,7 +52,7 @@ Required variables:
 | Variable | Description |
 |----------|-------------|
 | `GROQ_API_KEY` | Groq API key |
-| `GROQ_MODEL` | Model to use (e.g. `llama-3.3-70b-versatile`) |
+| `GROQ_MODEL` | Model to use (e.g. `openai/gpt-oss-120b`) |
 | `OLLAMA_EMBED_MODEL` | Ollama embedding model (e.g. `nomic-embed-text`) |
 | `ELASTICSEARCH_URL` | Elasticsearch URL (default: `http://localhost:9200`) |
 | `QDRANT_URL` | Qdrant URL (default: `http://localhost:6333`) |

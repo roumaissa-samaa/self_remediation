@@ -1,4 +1,3 @@
-
 import json as _json
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, StrictUndefined

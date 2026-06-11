@@ -23,7 +23,6 @@ def _kubectl_json(args: list) -> dict | None:
 
 
 def _kubectl_top_pods(namespace: str) -> dict:
-    """Returns {pod_name: {cpu_usage, memory_usage}} — requires metrics-server."""
     r = subprocess.run(
         ["kubectl", "top", "pod", "-n", namespace, "--no-headers"],
         capture_output=True, text=True, timeout=15,
@@ -216,6 +215,40 @@ def get_configmap_any_namespace(name: str) -> dict:
         if cm_data:
             result[ns] = cm_data
     return result
+
+
+def get_configmap_refs(name: str, namespace: str) -> list:
+    data = _kubectl_json(["get", "deployment", name, "-n", namespace])
+    if not data:
+        return []
+    pod_spec = data.get("spec", {}).get("template", {}).get("spec", {})
+    refs: set = set()
+    for c in pod_spec.get("containers", []) + pod_spec.get("initContainers", []):
+        for ef in c.get("envFrom", []):
+            cm = ef.get("configMapRef", {}).get("name")
+            if cm:
+                refs.add(cm)
+        for e in c.get("env", []):
+            cm = e.get("valueFrom", {}).get("configMapKeyRef", {}).get("name")
+            if cm:
+                refs.add(cm)
+    for v in pod_spec.get("volumes", []):
+        cm = v.get("configMap", {}).get("name")
+        if cm:
+            refs.add(cm)
+    return sorted(refs)
+
+
+def get_rollout_revision_count(name: str, namespace: str) -> int:
+    data = _kubectl_json(["get", "replicasets", "-n", namespace])
+    if not data:
+        return 0
+    count = 0
+    for rs in data.get("items", []):
+        owners = rs.get("metadata", {}).get("ownerReferences", [])
+        if any(o.get("kind") == "Deployment" and o.get("name") == name for o in owners):
+            count += 1
+    return count
 
 
 def get_jenkins_state() -> dict:

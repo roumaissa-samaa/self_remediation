@@ -85,15 +85,23 @@ async def receive_alert(request: Request):
 
                 alertname = annotations.get("alertname") or labels.get("alertname", "unknown")
 
-                raw_service = annotations.get("service") or labels.get("pod") or labels.get("service", "unknown")
-                service     = _deployment_name(raw_service)
-                namespace = annotations.get("namespace") or labels.get("namespace", "default")
-                message   = (annotations.get("message")
-                            or annotations.get("summary")
-                            or annotations.get("description", ""))
-
+                # Don't let a missing namespace masquerade as the watched one:
+                # label-less synthetic alerts (e.g. Watchdog) have no namespace and
+                # would otherwise fall through to "default" and pass the filter.
+                namespace = annotations.get("namespace") or labels.get("namespace")
                 if namespace != _ALLOWED_NAMESPACE:
                     continue
+
+                # No service/pod identity → not actionable (can't map to a pod).
+                raw_service = annotations.get("service") or labels.get("pod") or labels.get("service")
+                if not raw_service:
+                    logger.info("Skipping alert '%s' — no service/pod label", alertname)
+                    continue
+                service = _deployment_name(raw_service)
+
+                message = (annotations.get("message")
+                            or annotations.get("summary")
+                            or annotations.get("description", ""))
 
                 if _is_dedup_blocked(service, namespace):
                     continue

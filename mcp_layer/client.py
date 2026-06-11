@@ -111,6 +111,29 @@ def get_pod_memory_peak(service: str, namespace: str) -> dict:
         return {}
 
 
+def get_rollout_revision_count(name: str, namespace: str) -> int:
+    if MCP_MODE == "mock":
+        return 0
+    try:
+        return _sync_call("get_rollout_revision_count", {"name": name, "namespace": namespace})
+    except Exception as e:
+        import logging
+        logging.getLogger("mcp.client").warning("get_rollout_revision_count failed: %s", e)
+        return 0
+
+
+def get_configmap_refs(name: str, namespace: str) -> set:
+    if MCP_MODE == "mock":
+        return set()
+    try:
+        result = _sync_call("get_configmap_refs", {"name": name, "namespace": namespace})
+        return set(result)
+    except Exception as e:
+        import logging
+        logging.getLogger("mcp.client").warning("get_configmap_refs failed: %s", e)
+        return set()
+
+
 def get_configmap_any_namespace(name: str) -> dict:
     if MCP_MODE == "mock":
         return {}

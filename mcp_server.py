@@ -59,6 +59,18 @@ def get_configmap_any_namespace(name: str) -> str:
 
 
 @server.tool()
+def get_configmap_refs(name: str, namespace: str) -> str:
+    from k8s.k8s_client import get_configmap_refs as _fn
+    return json.dumps(_fn(name, namespace))
+
+
+@server.tool()
+def get_rollout_revision_count(name: str, namespace: str) -> str:
+    from k8s.k8s_client import get_rollout_revision_count as _fn
+    return json.dumps(_fn(name, namespace))
+
+
+@server.tool()
 def execute_kubectl(command: str, reason: str = "", risk_level: str = "low") -> str:
     from k8s.kubectl_executor import execute_action as _fn
     result = _fn({"command": command, "reason": reason, "risk_level": risk_level})

@@ -11,10 +11,15 @@ spec:
     interval: 30s
     rules:
     - alert: PodUnhealthy
+      # État courant uniquement → l'alerte se résout dès que le pod est sain.
+      # On a retiré deux clauses qui gardaient l'alerte allumée alors que le pod
+      # était déjà réparé (queue de comète de ~10 min, reason=None dans les logs) :
+      #   - last_terminated_reason : reste =1 toute la vie du pod après un crash
+      #   - increase(restarts_total[10m]) : reste vrai 10 min après le dernier restart
+      # waiting_reason couvre déjà CrashLoopBackOff / ImagePullBackOff / OOMKilled / Error,
+      # qui sont les états de blocage réels à remédier.
       expr: |
         kube_pod_container_status_waiting_reason{namespace="default", reason!="ContainerCreating", reason!="PodInitializing"} == 1
-        or kube_pod_container_status_last_terminated_reason{namespace="default", reason!="Completed"} == 1
-        or increase(kube_pod_container_status_restarts_total{namespace="default"}[10m]) > 0
       for: 0s
       labels:
         severity: critical

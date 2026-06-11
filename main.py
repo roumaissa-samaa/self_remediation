@@ -11,7 +11,6 @@ load_dotenv()
 
 
 def free_port(port: int):
-    """Kill any process occupying the given port (Windows)."""
     try:
         result = subprocess.run(
             ["netstat", "-ano"],
@@ -25,7 +24,7 @@ def free_port(port: int):
                     pids.add(parts[-1])
         for pid in pids:
             subprocess.run(["taskkill", "/PID", pid, "/F"],
-                           capture_output=True)
+                        capture_output=True)
             print(f"  Port {port} freed (PID {pid})")
     except Exception:
         pass
@@ -235,7 +234,6 @@ if __name__ == "__main__":
     print("  Webhook : http://localhost:8000")
     if mcp_mode == "real":
         print("  MCP     : http://localhost:8001/sse")
-    print("  Test    : python tests/simulate_alert.py")
     print("=" * 55 + "\n")
 
     start_consumer()
