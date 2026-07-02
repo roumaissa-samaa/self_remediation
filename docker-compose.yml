@@ -22,8 +22,12 @@ services:
   logstash:
     image: docker.elastic.co/logstash/logstash:8.13.0
     container_name: logstash
+    environment:
+      - LS_JAVA_OPTS=-Xms256m -Xmx256m
     ports:
-      - "5044:5044"
+      - "5000:5000"
+    volumes:
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
     depends_on:
       - elasticsearch
 

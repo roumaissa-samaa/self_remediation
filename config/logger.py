@@ -1,6 +1,9 @@
 import logging
 import json
+import os
+import socket
 import sys
+import time
 from datetime import datetime, timezone
 
 # Silence noisy third-party HTTP loggers — irrelevant in console
@@ -27,12 +30,69 @@ class _JsonFormatter(logging.Formatter):
         return json.dumps(entry, ensure_ascii=False, default=str)
 
 
+class _LogstashHandler(logging.Handler):
+    """Best-effort JSON-over-TCP shipping to Logstash.
+
+    Never blocks the app: if Logstash is unreachable, logs are silently
+    dropped and reconnection is attempted at most once per retry_interval.
+    """
+
+    def __init__(self, host: str, port: int, retry_interval: float = 60.0):
+        super().__init__()
+        self._addr = (host, port)
+        self._retry_interval = retry_interval
+        self._sock = None
+        self._next_attempt = 0.0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if self._sock is None:
+            now = time.monotonic()
+            if now < self._next_attempt:
+                return
+            try:
+                self._sock = socket.create_connection(self._addr, timeout=0.5)
+                self._sock.settimeout(2.0)
+            except OSError:
+                self._next_attempt = now + self._retry_interval
+                return
+        try:
+            self._sock.sendall(self.format(record).encode("utf-8") + b"\n")
+        except OSError:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+            self._next_attempt = time.monotonic() + self._retry_interval
+
+
+_logstash_handler = None
+_logstash_checked = False
+
+
+def _get_logstash_handler():
+    global _logstash_handler, _logstash_checked
+    if not _logstash_checked:
+        _logstash_checked = True
+        if os.getenv("LOGSTASH_ENABLED", "true").lower() in ("1", "true", "yes"):
+            handler = _LogstashHandler(
+                os.getenv("LOGSTASH_HOST", "localhost"),
+                int(os.getenv("LOGSTASH_PORT", "5000")),
+            )
+            handler.setFormatter(_JsonFormatter())
+            _logstash_handler = handler
+    return _logstash_handler
+
+
 def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(_JsonFormatter())
         logger.addHandler(handler)
+        logstash = _get_logstash_handler()
+        if logstash is not None:
+            logger.addHandler(logstash)
         logger.setLevel(logging.DEBUG)
         logger.propagate = False
     return logger

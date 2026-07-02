@@ -10,6 +10,14 @@ _MAX_RETRIES = 4
 _BASE_DELAY  = 10.0
 _MAX_WAIT    = 120.0
 
+# Pure LLM inference time (prompt -> response) accumulated per stage,
+# excluding MCP calls, runbook lookups and retry back-off sleeps.
+llm_timings: dict[str, float] = {}
+
+
+def reset_llm_timings() -> None:
+    llm_timings.clear()
+
 
 def _parse_wait_from_error(e: Exception) -> float | None:
     response = getattr(e, "response", None)
@@ -44,12 +52,18 @@ def _parse_duration(s: str) -> float | None:
     return total + 1.0 if total > 0 else None
 
 
-def invoke_with_retry(llm, messages: list[BaseMessage], max_retries: int = _MAX_RETRIES):
+def invoke_with_retry(llm, messages: list[BaseMessage], max_retries: int = _MAX_RETRIES, stage: str = ""):
     """Call llm.invoke() with Retry-After-aware backoff on Groq 429 errors."""
     delay = _BASE_DELAY
     for attempt in range(max_retries):
         try:
-            return llm.invoke(messages)
+            t0 = time.perf_counter()
+            result = llm.invoke(messages)
+            if stage:
+                elapsed = time.perf_counter() - t0
+                llm_timings[stage] = llm_timings.get(stage, 0.0) + elapsed
+                log.info("LLM inference time", extra={"stage": stage, "llm_s": round(elapsed, 2)})
+            return result
         except Exception as e:
             msg = str(e).lower()
             is_rate_limit = "429" in msg or "rate limit" in msg or "too many requests" in msg

@@ -118,7 +118,7 @@ def run_integration(state: AgentState) -> AgentState:
             cache_match=cache_match,
         )
 
-        response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)])
+        response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)], stage="planning")
         log.info("integration shared plan built", extra={"preview": response.content[:200]})
         trace_llm(name="integration_agent", input_text=user, output_text=response.content,
                 model=os.getenv("GROQ_MODEL"), session_id=inc["incident_id"])
@@ -167,7 +167,7 @@ def run_integration(state: AgentState) -> AgentState:
             opa_reason=opa.get("reason"),
         )
 
-        response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)])
+        response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)], stage="planning")
         log.info("integration revised plan", extra={"preview": response.content[:200]})
         trace_llm(name="integration_agent", input_text=user, output_text=response.content,
                 model=os.getenv("GROQ_MODEL"), session_id=inc["incident_id"])
@@ -223,7 +223,7 @@ def run_integration(state: AgentState) -> AgentState:
         cache_match=cache_match,
     )
 
-    response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)])
+    response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)], stage="planning")
     log.info("integration LLM decision", extra={"preview": response.content[:300]})
     trace_llm(name="integration_agent", input_text=user, output_text=response.content,
             model=os.getenv("GROQ_MODEL"), session_id=inc["incident_id"])

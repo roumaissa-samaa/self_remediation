@@ -142,7 +142,7 @@ def run_platform(state: AgentState) -> AgentState:
             found_configmaps=found_configmaps,
         )
 
-        response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)])
+        response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)], stage="planning")
         log.info("platform shared plan built", extra={"preview": response.content[:200]})
         trace_llm(name="platform_agent", input_text=user, output_text=response.content,
                 model=os.getenv("GROQ_MODEL"), session_id=inc["incident_id"])
@@ -200,7 +200,7 @@ def run_platform(state: AgentState) -> AgentState:
             found_configmaps=found_configmaps,
         )
 
-        response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)])
+        response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)], stage="planning")
         log.info("platform revised plan", extra={"preview": response.content[:200]})
         trace_llm(name="platform_agent", input_text=user, output_text=response.content,
                 model=os.getenv("GROQ_MODEL"), session_id=inc["incident_id"])
@@ -259,7 +259,7 @@ def run_platform(state: AgentState) -> AgentState:
         found_configmaps=found_configmaps,
     )
 
-    response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)])
+    response = invoke_with_retry(llm, [SystemMessage(content=system), HumanMessage(content=user)], stage="planning")
     log.info("platform LLM decision", extra={"preview": response.content[:300]})
     trace_llm(name="platform_agent", input_text=user, output_text=response.content,
             model=os.getenv("GROQ_MODEL"), session_id=inc["incident_id"])

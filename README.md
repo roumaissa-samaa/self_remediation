@@ -9,13 +9,14 @@ Alert → Webhook (FastAPI :8000)
       → Kafka topic "incidents"
       → Consumer → LangGraph Pipeline
                      ├─ [observability]   LLM classification (platform / integration)
-                     ├─ [check_cache]     Qdrant semantic cache
-                     ├─ [platform]        K8s remediation plan (LLM + runbooks)
-                     ├─ [integration]     Jenkins/DB remediation plan (LLM + runbooks)
+                     ├─ [platform]        K8s remediation plan (LLM + runbooks + semantic cache)
+                     ├─ [integration]     Jenkins/DB remediation plan (LLM + runbooks + semantic cache)
                      ├─ [opa_validate]    OPA policy validation
                      ├─ [execute]         Execution via MCP
+                     ├─ [post_check]      Post-remediation health verification
+                     ├─ [notify]          Operator notification (resolved / unresolved / blocked)
                      ├─ [audit]           Elasticsearch indexing
-                     └─ [enrich_memory]   Qdrant memory + semantic cache
+                     └─ [enrich_memory]   Qdrant memory + semantic cache write
 ```
 
 Agents can exchange data: if Platform needs Jenkins/DB state (or Integration needs K8s state), they request it from each other before building their plan. OPA validation supports up to `OPA_MAX_RETRIES` revision cycles before blocking and escalating.
@@ -35,7 +36,9 @@ Agents can exchange data: if Platform needs Jenkins/DB state (or Integration nee
 docker compose up -d
 ```
 
-Services: Elasticsearch, Kibana, Kafka, Zookeeper, Qdrant, OPA, Langfuse, PostgreSQL.
+Services: Elasticsearch, Kibana, Logstash, Kafka, Zookeeper, Qdrant, OPA, Langfuse, PostgreSQL.
+
+Application logs are shipped to Logstash (TCP `:5000`) and indexed in Elasticsearch under `app-logs-*`, browsable in Kibana. Shipping is best-effort: if Logstash is down, the app runs normally (set `LOGSTASH_ENABLED=false` to disable).
 
 ```bash
 docker compose ps
@@ -55,6 +58,7 @@ Required variables:
 | `GROQ_MODEL` | Model to use (e.g. `openai/gpt-oss-120b`) |
 | `OLLAMA_EMBED_MODEL` | Ollama embedding model (e.g. `nomic-embed-text`) |
 | `ELASTICSEARCH_URL` | Elasticsearch URL (default: `http://localhost:9200`) |
+| `LOGSTASH_HOST` / `LOGSTASH_PORT` | Logstash log shipping (default: `localhost:5000`, `LOGSTASH_ENABLED=false` to disable) |
 | `QDRANT_URL` | Qdrant URL (default: `http://localhost:6333`) |
 | `KAFKA_BROKER` | Kafka broker (default: `localhost:9092`) |
 | `OPA_URL` | OPA URL (default: `http://localhost:8181`) |
@@ -80,22 +84,7 @@ On startup, the system automatically:
 - Starts the FastAPI webhook on `:8000`
 - Starts the Kafka consumer
 
-### 5. Test
-
-```bash
-python tests/simulate_alert.py
-```
-
-Interactive menu with 7 scenarios:
-1. Platform only — CrashLoopBackOff
-2. Integration only — DB connection exhausted
-3. Shared state — Integration requests K8s data
-4. Shared state — Platform requests DB data
-5. OPA validation (approval)
-6. OPA rejection + retry approval
-7. OPA double rejection (block + escalation)
-
-Or send an alert manually:
+### 5. Send an alert
 
 ```bash
 curl -X POST http://localhost:8000/alert \
@@ -116,7 +105,7 @@ The webhook also accepts the native Alertmanager format (`{"alerts": [...]}`) an
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CACHE_SCORE_THRESHOLD` | `0.80` | Minimum score for a semantic cache hit |
-| `OPA_MAX_RETRIES` | `2` | Maximum OPA retry attempts before blocking |
+| `OPA_MAX_RETRIES` | `5` | Maximum OPA retry attempts before blocking |
 | `CONSUMER_RETRY_DELAYS` | `2,5,10` | Delays (seconds) between consumer retries |
 | `WEBHOOK_DEDUP_TTL_S` | `60` | Dedup window (seconds) per pod/namespace |
 | `FINGERPRINT_TTL_S` | `300` | Suppression window after a successful resolution |
@@ -156,22 +145,16 @@ kafka_bridge/
   producer.py          Kafka producer
   pre_check.py         Pre-publish pod health check
 
-mcp/
-  client.py            MCP dispatcher (mock / real mode)
-  mock_data.py         Static mock data for local testing
+mcp_layer/
+  client.py            MCP dispatcher
 
 k8s/
   prometheus_client.py     Logs (kubectl events) + metrics (Prometheus API)
   k8s_client.py            K8s state — pods, nodes, deployments (kubectl)
   kubectl_executor.py      Action execution via kubectl commands
   manifests/
-    alertmanager-config.yaml  Alertmanager webhook → http://host.minikube.internal:8000/alert
+    alertmanager-config.yaml  Alertmanager webhook → /alert endpoint
     prometheus-rules.yaml     PrometheusRule for CrashLoopBackOff and OOMKilled alerts
-  fixtures/
-    crash-test.yaml      CrashLoopBackOff (busybox exit 1)
-    oomkill-test.yaml    OOMKill (stress vs 50Mi limit)
-    image-pull-test.yaml ImagePullBackOff
-    probe-fail-test.yaml PodNotReady (readiness probe)
 
 setup/
   seed_rag.py          Runbook loader into Qdrant
@@ -181,10 +164,8 @@ config/
   langfuse.py                LLM tracing instrumentation
   prompts.py                 Jinja2 prompt loader
   logger.py                  Structured logging setup
+  circuit_breaker.py         Failure-rate circuit breaker
   remediation_policy.rego    OPA authorization policy
-
-tests/
-  simulate_alert.py    Interactive test scenarios
 ```
 
 ## Shutdown
@@ -197,22 +178,14 @@ Ctrl+C
 docker compose down
 ```
 
-## MCP Mode
+## Execution Mode
 
-The system runs in mock mode by default (`MCP_MODE=mock`).
-
-### Mock mode (default)
-
-No external dependencies. Static data from `mcp/mock_data.py` is used for all agents.
-
-### Real mode (minikube)
-
-Connects to a live minikube cluster. Data collection uses `kubectl` and the Prometheus API; actions execute directly via `kubectl`. After each remediation, a post-check verifies the deployment is actually healthy before marking the incident resolved and writing to the semantic cache.
+The system connects to a live Kubernetes cluster via MCP (`MCP_MODE=real`). Data collection uses `kubectl` and the Prometheus API; actions execute directly via `kubectl`. After each remediation, a post-check verifies the deployment is actually healthy before marking the incident resolved and writing to the semantic cache.
 
 **Requirements:**
-- minikube running (`minikube start`)
+- A reachable cluster (`kubectl` configured)
 - Prometheus stack installed (e.g. `kube-prometheus-stack` via Helm)
-- Prometheus port-forwarded: `kubectl port-forward -n monitoring svc/prometheus-operated 9090:9090`
+- Prometheus reachable from the system (e.g. `kubectl port-forward -n monitoring svc/prometheus-operated 9090:9090`)
 
 **Enable:**
 
@@ -223,20 +196,9 @@ PROMETHEUS_URL=http://localhost:9090
 K8S_NAMESPACE=default
 ```
 
-**Deploy test workloads:**
-
-```bash
-kubectl apply -f k8s/fixtures/crash-test.yaml      # CrashLoopBackOff
-kubectl apply -f k8s/fixtures/oomkill-test.yaml    # OOMKill
-kubectl apply -f k8s/fixtures/image-pull-test.yaml # ImagePullBackOff
-kubectl apply -f k8s/fixtures/probe-fail-test.yaml # PodNotReady
-```
-
 **Configure Alertmanager:**
 
 ```bash
 kubectl apply -f k8s/manifests/alertmanager-config.yaml
 kubectl apply -f k8s/manifests/prometheus-rules.yaml
 ```
-
-Alerts are sent to `http://host.minikube.internal:8000/alert` (your local webhook).

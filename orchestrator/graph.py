@@ -12,6 +12,7 @@ from agents.executor import execute_plan
 from agents.audit import record_audit
 from agents.memory_writer import enrich_memory
 from agents.notifier import notify_operator, notify_resolved_node, notify_unresolved_node
+from agents.llm_retry import llm_timings, reset_llm_timings
 from orchestrator.post_check import post_check_node
 from config.logger import get_logger
 import os, time
@@ -209,6 +210,7 @@ def run_pipeline(incident: dict):
     print(f"  ID         : {incident['incident_id']}")
     print(f"{_SEP}\n")
 
+    reset_llm_timings()
     t_pipeline_start = time.perf_counter()
     final_state      = pipeline.invoke(initial_state)
     total_s          = time.perf_counter() - t_pipeline_start
@@ -241,7 +243,9 @@ def run_pipeline(incident: dict):
     print(f"  RESPONSE TIME  →  {total_s:.1f}s total")
     for stage in _STAGE_ORDER:
         if stage in timings:
-            print(f"  {stage:<16}: {timings[stage]:>6.1f}s")
+            print(f"  {stage:<16}: {timings[stage] * 1000:>8.0f}ms")
+            if stage in llm_timings:
+                print(f"    └ llm         : {llm_timings[stage] * 1000:>8.0f}ms")
     print(f"{_SEP}\n")
 
     log.info("pipeline complete", extra={
@@ -253,5 +257,6 @@ def run_pipeline(incident: dict):
         "exec_result":  exec_st.get("execution_result"),
         "total_s":      round(total_s, 2),
         "timings":      {k: round(v, 2) for k, v in timings.items()},
+        "llm_timings":  {k: round(v, 2) for k, v in llm_timings.items()},
     })
     return final_state
